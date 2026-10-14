@@ -1,0 +1,7 @@
+# do not use git to manage datasets
+data/*.zip
+data/*.csv
+# separate individual Rproj user file
+.Rproj.user
+# do not include knitted Rmd html file
+*.html
