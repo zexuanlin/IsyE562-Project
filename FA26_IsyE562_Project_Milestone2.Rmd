@@ -30,12 +30,63 @@ library(data.table)
 library(lubridate)
 ```
 
-```{r load and inspect dataset}
+```{r load-and-inspect-dataset, eval=FALSE}
 data_wsb2022_raw = read_csv("./data/wallstreetbets_2022.csv")
 
 data_wsb2022_raw |>
   head(5) |>
   kable()
+
+data_wsb2022_postonly = data_wsb2022_raw |>
+  filter(title != "Comment")
+
+data_wsb2022_postonly
+
+nrow(data_wsb2022_raw)
+nrow(data_wsb2022_postonly)
+
+data_wsb2022_postonly |>
+  write_csv("./data/wsb_2022_postonly.csv")
+```
+
+
+
+```{r sarcasm-dataset}
+data_wsb2022_sarcasm = read_csv("./data/wsb_2022_postonly_sarcasm.csv")
+data_wsb2022_sarcasm |>
+  head(5)
+
+data = data_wsb2022_sarcasm |>
+  dplyr::mutate(
+    created_ny_time = format(
+      lubridate::with_tz(lubridate::as_datetime(created, tz = "UTC"), tzone = "America/New_York"),
+      "%H:%M:%S"
+    ),
+    created_ny_hour_bin = {
+      ny_hour = as.integer(substr(created_ny_time, 1L, 2L))
+      hour_label = dplyr::if_else(
+        is.na(ny_hour), NA_character_, paste0(ny_hour, "-", (ny_hour + 1L) %% 24L)
+      )
+      factor(hour_label, levels = paste0(0:23, "-", (1:24) %% 24), ordered = TRUE)
+    },
+    no_body = is.na(body) | trimws(body) == "",
+    body_work_count = stringr::str_count(dplyr::coalesce(body, ""), "\\S+"),
+    link_only = {
+      body_text = stringr::str_trim(dplyr::coalesce(body, ""))
+      (stringr::str_detect(body_text, "(?i)^https?://\\S+$") |
+        stringr::str_detect(body_text, "(?i)^\\[[^\\]]+\\]\\(https?://\\S+\\)$")) &
+        !stringr::str_detect(
+          body_text,
+          "(?i)https?://(?:[a-z0-9-]+\\.)*(?:reddit\\.com|redd\\.it)(?=[:/?#]|$)"
+        )
+    }
+  )
+
+data |>
+  head(5) |>
+  kable()
+
+colnames(data)
 ```
 
 
