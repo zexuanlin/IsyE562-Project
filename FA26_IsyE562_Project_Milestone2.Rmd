@@ -14,7 +14,7 @@ output:
     number_sections: true
     theme: flatly
     highlight: kate
-    code_folding: hide
+    code_folding: show
     fig_width: 10
     fig_height: 6
 ---
@@ -50,6 +50,10 @@ sarcasm database
 [SARC](https://arxiv.org/abs/1704.05579?utm_source=chatgpt.com). Posts without
 body have sarcasm score 0.
 
+The complimentary dataset we are considering might be daily stock price in NYSE,
+like NASDAQ, S&P 500. We will only use these data along with comment data to
+*predict* the intearction indexes.
+
 ## Assumptions:
 
 ### Assumption 1: SARC classifier reliability 
@@ -70,14 +74,16 @@ AST SpaceMobile satellite posts differ by a few characters. We are unable to
 independently verify the geunity of data sources.
 
 
-Load data reading libraries
+# Data loading and processing
 
 ```{r setup}
 library(tidyverse)
 library(knitr)
 library(data.table)
-library(lubridate)
+library(lubridate) # data-time package
 ```
+
+Raw data loading, selecting only posts
 
 ```{r load-and-inspect-dataset, eval=FALSE}
 data_wsb2022_raw = read_csv("./data/wallstreetbets_2022.csv")
@@ -101,11 +107,15 @@ data_wsb2022_postonly |>
 
 
 ```{r sarcasm-dataset}
+# load post-only data
 data_wsb2022_sarcasm = read_csv("./data/wsb_2022_postonly_sarcasm.csv")
+# peek
 data_wsb2022_sarcasm |>
   head(5)
 
+# Derivate meaningful variables for descriptive & exploratory analysis
 data = data_wsb2022_sarcasm |>
+  # created time in NY timezone (wallstreet)
   dplyr::mutate(
     created_ny_time = format(
       lubridate::with_tz(lubridate::as_datetime(created, tz = "UTC"), tzone = "America/New_York"),
@@ -118,8 +128,11 @@ data = data_wsb2022_sarcasm |>
       )
       factor(hour_label, levels = paste0(0:23, "-", (1:24) %% 24), ordered = TRUE)
     },
+    # posts without body
     no_body = is.na(body) | trimws(body) == "",
+    # post content word count
     body_work_count = stringr::str_count(dplyr::coalesce(body, ""), "\\S+"),
+    # posts with only a link
     link_only = {
       body_text = stringr::str_trim(dplyr::coalesce(body, ""))
       (stringr::str_detect(body_text, "(?i)^https?://\\S+$") |
@@ -131,16 +144,17 @@ data = data_wsb2022_sarcasm |>
     }
   )
 
+# peek
 data |>
   head(5) |>
   kable()
 
 colnames(data)
 ```
-# Exploratory data analysis
 
 ## data removed
-**Child Comment Filtering (~1,002,830 rows dropped): The raw scraped dataset contained over 1.09 million items. Over 90% of these records represent child comment replies (where title == "Comment"). Because our research goal is predicting thread-level submission engagement (comms_num), child comment replies lack independent comment totals and post titles. Retaining them would severely bias target metrics. Restricting analysis strictly to top-level submissions reduced the working dataset to ~96,375 records. 
+
+**Child Comment Filtering (~1,002,830 rows dropped)**: The raw scraped dataset contained over 1.09 million items. Over 90% of these records represent child comment replies (where title == "Comment"). Because our research goal is predicting thread-level submission engagement (comms_num), child comment replies lack independent comment totals and post titles. Retaining them would severely bias target metrics. Restricting analysis strictly to top-level submissions reduced the working dataset to ~96,375 records. 
 
 Corrupted Identifier Records (1,114 rows dropped): Programmatic verification identified 1,114 rows lacking valid submission IDs (id == NA). These corrupted rows were dropped during initial pipeline filtering.  
 
@@ -159,24 +173,25 @@ library(assertr)
 
 # 1. Clean missing IDs and target values
 data_cleaned <- data |>
-  filter(!is.na(id)) |>                              # Remove corrupt/missing ID rows
-  mutate(comms_num = dplyr::coalesce(comms_num, 0))  # Replace NA comment counts with 0
+  filter(!is.na(id), !is.na(created)) |> # Remove rows without an ID or timestamp
+  mutate(comms_num = dplyr::coalesce(comms_num, 0)) # Replace NA comment counts with 0
 
 # 2. Run quality assertions
 data_verified <- data_cleaned |>
-  verify(comms_num >= 0) |>                          # Engagement counts must be non-negative
-  verify(!is.na(id)) |>                              # Reddit Post IDs must not be NA
-  verify(!is.na(created)) |>                         # Timestamps must exist
-  verify(sarcasm_score >= 0 & sarcasm_score <= 1)   # Sarcasm probability must be [0, 1]
+  verify(comms_num >= 0) |> # Engagement counts must be non-negative
+  verify(!is.na(id)) |> # Reddit Post IDs must not be NA
+  verify(!is.na(created)) |> # Timestamps must exist
+  verify(!is.na(title_sarcasm) & title_sarcasm >= 0 & title_sarcasm <= 100) |>
+  verify(!is.na(body_sarcasm) & body_sarcasm >= 0 & body_sarcasm <= 100)
 
 # 3. Document dataset dimensions
-dim_raw <- dim(data_wsb2022_raw)
+dim_source <- dim(data_wsb2022_sarcasm)
 dim_filtered <- dim(data_verified)
 
 dim_summary <- tibble(
-  Stage = c("Raw Scraped Dataset", "Cleaned & Verified Dataset"),
-  Rows = c(dim_raw[1], dim_filtered[1]),
-  Columns = c(dim_raw[2], dim_filtered[2])
+  Stage = c("Post-only Source Dataset", "Cleaned & Verified Dataset"),
+  Rows = c(dim_source[1], dim_filtered[1]),
+  Columns = c(dim_source[2], dim_filtered[2])
 )
 
 dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
@@ -188,12 +203,12 @@ dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
 # 1. Structural summary of all columns (types and sample values)
 dplyr::glimpse(data_verified)
 
-# 2. Standard 5-number summary across all columns
-summary(data_verified)
+# 2. Standard summary, excluding the Unix timestamp
+summary(data_verified |> select(-created))
 
 # 3. Detailed summary statistics table for numeric features
 data_verified |>
-  select(where(is.numeric)) |>
+  select(where(is.numeric), -created) |>
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") |>
   group_by(Variable) |>
   summarise(
@@ -205,17 +220,69 @@ data_verified |>
     Max = max(Value, na.rm = TRUE),
     Std_Dev = sd(Value, na.rm = TRUE)
   ) |>
-  knitr::kable(digits = 2, caption = "Summary Statistics for Numeric Variables")
+  mutate(Variable = dplyr::recode(
+    Variable,
+    score = "Post score",
+    comms_num = "Comment count",
+    title_sarcasm = "Title sarcasm score (0–100)",
+    body_sarcasm = "Body sarcasm score (0–100)",
+    body_work_count = "Body word count",
+    .default = Variable
+  )) |>
+  knitr::kable(
+    digits = 2,
+    col.names = c(
+      "Measure", "Minimum", "1st quartile", "Median", "Mean",
+      "3rd quartile", "Maximum", "Std. deviation"
+    ),
+    caption = "Summary Statistics for Numeric Variables"
+  )
+```
 
-# 4. Proportion breakdown for logical and factor features
+### Posts by New York hour
+
+```{r hour-bin-summary}
 data_verified |>
-  select(where(is.logical), where(is.factor)) |>
-  mutate(across(everything(), as.character)) |>
-  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Category") |>
-  count(Variable, Category) |>
-  group_by(Variable) |>
-  mutate(Percentage = round(n / sum(n) * 100, 2)) |>
-  knitr::kable(caption = "Distribution of Categorical and Logical Variables")
+  count(created_ny_hour_bin, name = "Posts", .drop = FALSE) |>
+  arrange(created_ny_hour_bin) |>
+  mutate(Share = 100 * Posts / sum(Posts)) |>
+  knitr::kable(
+    digits = 1,
+    col.names = c("New York hour", "Post count", "Share (%)"),
+    caption = "Posts by New York Local Hour"
+  )
+```
+
+### Link-only bodies
+
+```{r link-only-summary}
+data_verified |>
+  count(link_only, name = "Posts") |>
+  mutate(
+    link_only = if_else(link_only, "Yes", "No"),
+    Share = 100 * Posts / sum(Posts)
+  ) |>
+  knitr::kable(
+    digits = 1,
+    col.names = c("Link-only body", "Post count", "Share (%)"),
+    caption = "Posts with Link-Only Bodies"
+  )
+```
+
+### Missing bodies
+
+```{r no-body-summary}
+data_verified |>
+  count(no_body, name = "Posts") |>
+  mutate(
+    no_body = if_else(no_body, "Yes", "No"),
+    Share = 100 * Posts / sum(Posts)
+  ) |>
+  knitr::kable(
+    digits = 1,
+    col.names = c("Body missing", "Post count", "Share (%)"),
+    caption = "Posts with Missing Bodies"
+  )
 ```
 
 
@@ -286,21 +353,14 @@ p_sarcasm + p_score
 
 ## comments from graphs
 
-Upvote count exhibits a strong positive linear relationship with comment volume, making it the strongest predictor of engagement.
-
-Linear correlation between sarcasm and log comments is near zero, however a nonlinear colleration can be see. there is a small peak as sarcasm score between a score of 0 and ~15 and then a dip until 25. 
-
-Relation with Post Length & Upvotes: Word count has a moderate negative correlation with upvotes
+- Upvote count exhibits a strong positive linear relationship with comment volume.
+- Linear correlation between sarcasm and log comments is near zero, however a nonlinear colleration can be see. there is a small peak as sarcasm score between a score of 0 and ~15 and then a dip until 25. 
+- Relation with Post Length & Upvotes: Word count has a moderate negative correlation with upvotes
 
 ## features that may undermine analysis / missing features
 
 - Upvote score shares a strong correlation with comment count, however, comments can me made after the dataset was created. 
 - Title sarcasm probability exhibits a near-zero linear correlation with comments. Linear modeling will fail to capture this tends
--The analysis models can not account for sarcasm in replies as those were discarded
-
+- The analysis models can not account for sarcasm in replies as those were discarded
 - Both comms_num and score have extremely long tails (max score 22,503 vs. median about 80).
-
 - Emoji and Reddit emote markup appear in the data. Sarcasm cues in WSB are often carried by emoji which text-only methods will not properly handle. 
->>>>>>> 19059b269cc6227424c7dd689ddc9f79efdd7b1b
-
-
