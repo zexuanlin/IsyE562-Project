@@ -182,9 +182,125 @@ dim_summary <- tibble(
 dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
 ```
 
+## data summary
+
+```{r column-summaries}
+# 1. Structural summary of all columns (types and sample values)
+dplyr::glimpse(data_verified)
+
+# 2. Standard 5-number summary across all columns
+summary(data_verified)
+
+# 3. Detailed summary statistics table for numeric features
+data_verified |>
+  select(where(is.numeric)) |>
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") |>
+  group_by(Variable) |>
+  summarise(
+    Min = min(Value, na.rm = TRUE),
+    Q1 = quantile(Value, 0.25, na.rm = TRUE),
+    Median = median(Value, na.rm = TRUE),
+    Mean = mean(Value, na.rm = TRUE),
+    Q3 = quantile(Value, 0.75, na.rm = TRUE),
+    Max = max(Value, na.rm = TRUE),
+    Std_Dev = sd(Value, na.rm = TRUE)
+  ) |>
+  knitr::kable(digits = 2, caption = "Summary Statistics for Numeric Variables")
+
+# 4. Proportion breakdown for logical and factor features
+data_verified |>
+  select(where(is.logical), where(is.factor)) |>
+  mutate(across(everything(), as.character)) |>
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Category") |>
+  count(Variable, Category) |>
+  group_by(Variable) |>
+  mutate(Percentage = round(n / sum(n) * 100, 2)) |>
+  knitr::kable(caption = "Distribution of Categorical and Logical Variables")
+```
+
+
 # Exploratory data analysis
+
+
+
+```{r plot-target-and-predictor-distributions, fig.width=10, fig.height=6}
+library(ggplot2)
+library(patchwork)
+
+# Target Variable: Raw vs. Log-Transformed Engagement
+p1 <- ggplot(data_verified, aes(x = comms_num)) +
+  geom_histogram(bins = 50, fill = "#2b5c8f", color = "black", alpha = 0.8) +
+  scale_y_log10() +
+  labs(title = "Raw Comment Count (Log Y-Scale)", x = "comms_num", y = "Count (Log Scale)") +
+  theme_minimal()
+
+p2 <- ggplot(data_verified, aes(x = log1p(comms_num))) +
+  geom_histogram(bins = 50, fill = "#2e7d32", color = "black", alpha = 0.8) +
+  labs(title = "Log Target: log(1 + comms_num)", x = "log1p(comms_num)", y = "Count") +
+  theme_minimal()
+
+#  Pairwise Scatterplot & Density Matrix
+if (!requireNamespace("GGally", quietly = TRUE)) install.packages("GGally")
+library(GGally)
+
+matrix_vars <- data_verified |>
+  mutate(
+    log_comms = log1p(as.numeric(comms_num)),
+    log_score = log1p(as.numeric(score)),
+    log_words = log1p(as.numeric(body_work_count)),
+    title_sarcasm = as.numeric(title_sarcasm)
+  ) |>
+  select(log_comms, title_sarcasm, log_score, log_words)
+
+ggpairs(
+  matrix_vars,
+  columnLabels = c("Log Comms", "Sarcasm", "Log Score", "Log Words"),
+  lower = list(continuous = wrap("points", alpha = 0.03, size = 0.3, color = "#2c3e50")),
+  diag = list(continuous = wrap("densityDiag", fill = "#3498db", alpha = 0.5)),
+  upper = list(continuous = wrap("cor", size = 4, color = "black"))
+) + theme_minimal()
+
+#  Scatterplots with Non-Linear Smoothing Curves
+p_sarcasm <- ggplot(data_verified, aes(x = as.numeric(title_sarcasm), y = log1p(as.numeric(comms_num)))) +
+  geom_point(alpha = 0.03, color = "#1a237e", size = 0.8) +
+  geom_smooth(method = "gam", color = "#d32f2f", size = 1.2, se = TRUE) +
+  labs(
+    title = "Sarcasm Probability vs. Log Engagement",
+    x = "Title Sarcasm Score",
+    y = "Log Engagement log(1 + comms_num)"
+  ) +
+  theme_minimal()
+
+p_score <- ggplot(data_verified, aes(x = log1p(as.numeric(score)), y = log1p(as.numeric(comms_num)))) +
+  geom_point(alpha = 0.03, color = "#004d40", size = 0.8) +
+  geom_smooth(method = "lm", color = "#ff6f00", size = 1.2, se = TRUE) +
+  labs(
+    title = "Log Upvote Score vs. Log Engagement",
+    x = "Log Upvotes log(1 + score)",
+    y = "Log Engagement log(1 + comms_num)"
+  ) +
+  theme_minimal()
+
+p_sarcasm + p_score
+```
+
+## comments from graphs
+
+Upvote count exhibits a strong positive linear relationship with comment volume, making it the strongest predictor of engagement.
+
+Linear correlation between sarcasm and log comments is near zero, however a nonlinear colleration can be see. there is a small peak as sarcasm score between a score of 0 and ~15 and then a dip until 25. 
+
+Relation with Post Length & Upvotes: Word count has a moderate negative correlation with upvotes
+
+## features that may undermine analysis / missing features
+
+- Upvote score shares a strong correlation with comment count, however, comments can me made after the dataset was created. 
+- Title sarcasm probability exhibits a near-zero linear correlation with comments. Linear modeling will fail to capture this tends
+-The analysis models can not account for sarcasm in replies as those were discarded
 
 - Both comms_num and score have extremely long tails (max score 22,503 vs. median about 80).
 
 - Emoji and Reddit emote markup appear in the data. Sarcasm cues in WSB are often carried by emoji which text-only methods will not properly handle. 
 >>>>>>> 19059b269cc6227424c7dd689ddc9f79efdd7b1b
+
+
