@@ -20,17 +20,54 @@ output:
 ---
 
 # Data source description
-Data source is: https://www.reddit.com/r/wallstreetbets/
-Data collected using praw Python package
-Data is collected and merged daily
 
-## Assumption 1: 
+## Data source:
+
+The primary dataset of this project is the Kaggle dataset [Wall Street Bets 2022](https://www.kaggle.com/datasets/gpreda/wallstreetbets-2022).
+The original author collected the dataset using python package `praw` daily, and
+scraped the daily data from Reddit. While being named "WSB data 2022", the
+actual date of post span across January 27, 2021 and March 27, 2025, give us
+four years of timespan to study. For our study, we are only interested in the
+*post* data along with their interaction index (points, comment number),
+therefore comment data (with a title "Comment") were excluded.
+
+The original dataset contains the following columns:
+
+- Post title
+- Post score
+- Post ID
+- Post URL
+- Number of comments under the post
+- Creation timestamp
+- Post body (content)
+- Timestap (in date format)
+
+We expanded the dataset by adding sarcasm score for both post title and post
+body, under column `title_sarcasm` and `body_sarcasm`. The sarcasm score was
+created with the assistence of [bertweet-base-finetuned-SARC-DS](https://huggingface.co/surrey-nlp/bertweet-base-finetuned-SARC-DS),
+a publicly available huggingface model trained based on self-annotated reddit
+sarcasm database
+[SARC](https://arxiv.org/abs/1704.05579?utm_source=chatgpt.com). Posts without
+body have sarcasm score 0.
+
+## Assumptions:
+
+### Assumption 1: SARC classifier reliability 
+
 Sarcasm can be reliably detected using SARC as the training set.
-The SARC training data consists of Reddit comments from 2009-2017, while the target data is r/wallstreetbets posts from 2022. The two differ in time period, community, and text type. Meme culture on r/wallstreetbets means its references, jokes, and sarcasm are constantly changing, and memes are well documented to have short lifespans in online spaces. This matters here because many of the sarcastic references in the 2022 data did not exist in the 2009-2017 period.
+The SARC training data consists of Reddit comments from 2009-2017, while the target data is r/wallstreetbets posts from 2022. 
+The two differ in time period, community, and text type. Meme culture on r/wallstreetbets means its references, jokes, and sarcasm are constantly changing,
+and memes are well documented to have short lifespans in online spaces. 
+This matters here because many of the sarcastic references in the 2022 data did not exist in the 2009-2017 period.
 
-## Assumption 2: 
-The sample, and the 2022 data in general, represent WSB behavior well enough to generalize.
-Of the 68 posts on 3/31/22, 58 were driven by the GME stock split, so that day is dominated by a specific event rather than typical day-to-day behavior. We cannot say with confidence whether the language used on high-excitement days like this is consistent with an “average” day, or with a day without such news.
+## Assumption 2: Genuine human posts
+
+While the dataset across 2021-2025 should provide us with a relatively
+representative r/wallstreetbets post pattern, the conclusion might still be
+biased if automatic bots represented a different posting behavior. For instance, 
+within the first 100 rows or so there are a couple near-duplicate posts like two 
+AST SpaceMobile satellite posts differ by a few characters. We are unable to
+independently verify the geunity of data sources.
 
 
 Load data reading libraries
@@ -106,7 +143,5 @@ colnames(data)
 
 # Exploratory data analysis
 - Both comms_num and score have extremely long tails (max score 22,503 vs. median about 80).
-
-- Within the first 100 rows or so there are a couple near-duplicate posts. For example, two AST SpaceMobile satellite posts differ by a few characters. 
 
 - Emoji and Reddit emote markup appear in the data. Sarcasm cues in WSB are often carried by emoji which text-only methods will not properly handle. 
