@@ -4,7 +4,7 @@ subtitle: "Data visualization and analysis plan"
 author: 
   - Zexuan Lin
   - Raheem Sultan Ali
-  - Max Williemsen
+  - Max Willemsen
 date: "`r Sys.Date()`"
 output: 
   html_document:
@@ -20,6 +20,18 @@ output:
 ---
 
 # Data source description
+Data source is: https://www.reddit.com/r/wallstreetbets/
+Data collected using praw Python package
+Data is collected and merged daily
+
+## Assumption 1: 
+Sarcasm can be reliably detected using SARC as the training set.
+The SARC training data consists of Reddit comments from 2009-2017, while the target data is r/wallstreetbets posts from 2022. The two differ in time period, community, and text type. Meme culture on r/wallstreetbets means its references, jokes, and sarcasm are constantly changing, and memes are well documented to have short lifespans in online spaces. This matters here because many of the sarcastic references in the 2022 data did not exist in the 2009-2017 period.
+
+## Assumption 2: 
+The sample, and the 2022 data in general, represent WSB behavior well enough to generalize.
+Of the 68 posts on 3/31/22, 58 were driven by the GME stock split, so that day is dominated by a specific event rather than typical day-to-day behavior. We cannot say with confidence whether the language used on high-excitement days like this is consistent with an “average” day, or with a day without such news.
+
 
 Load data reading libraries
 
@@ -88,6 +100,18 @@ data |>
 
 colnames(data)
 ```
+# Exploratory data analysis
+
+## data removed
+**Child Comment Filtering (~1,002,830 rows dropped): The raw scraped dataset contained over 1.09 million items. Over 90% of these records represent child comment replies (where title == "Comment"). Because our research goal is predicting thread-level submission engagement (comms_num), child comment replies lack independent comment totals and post titles. Retaining them would severely bias target metrics. Restricting analysis strictly to top-level submissions reduced the working dataset to ~96,375 records. 
+
+Corrupted Identifier Records (1,114 rows dropped): Programmatic verification identified 1,114 rows lacking valid submission IDs (id == NA). These corrupted rows were dropped during initial pipeline filtering.  
+
+Missing Creation Timestamps (51 rows dropped): Quality assertions flagged 51 rows where the post creation timestamp was missing (created == NA). Because creation timestamps are strictly required to engineer our temporal market-hour features (created_ny_hour_bin), these incomplete records were removed.
+
+Missing Sarcasm Scores (11 rows dropped): Quality assertions identified 11 records lacking valid title_sarcasm scores. These missing values occurred during natural language processing (NLP) batch inference due to special characters or non-UTF-8 text encoding. Because title sarcasm is our central independent variable, these 11 rows were removed. 
+
+Zero Imputation for Missing Engagement (comms_num): Rather than discarding submissions with missing comment counts, missing comms_num values were imputed to 0 via coalesce(), correctly representing posts that received zero user replies.   Following this pipeline, the final cleaned dataset contains 95,199 verified top-level submissions with zero missing values across critical modeling features**
 
 
 # Descriptive analysis and missing data
@@ -122,6 +146,10 @@ dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
 ```
 
 # Exploratory data analysis
-**Missing Data in Target Variable (comms_num): During quality assertions, 1,164 rows (approx. 1% of posts) were found to have NA listed for comms_num. This occurs in Reddit web scrapes when a post receives no comments and the API yields a null field rather than an explicit zero. We resolved this by imputing NA values to 0 prior to modeling.**
 
-**Missing Unique Identifiers (id): Quality assertions revealed 1,114 rows with missing id values. These represent corrupted web-scraping artifacts or unlinked merged entries. Because an explicit post ID is required for primary indexing and record tracking, we removed these 1,114 rows ($\approx 1\%$ of the dataset) during preprocessing.**
+- Both comms_num and score have extremely long tails (max score 22,503 vs. median about 80).
+
+- Within the first 100 rows or so there are a couple near-duplicate posts. For example, two AST SpaceMobile satellite posts differ by a few characters. 
+
+- Emoji and Reddit emote markup appear in the data. Sarcasm cues in WSB are often carried by emoji which text-only methods will not properly handle. 
+>>>>>>> 19059b269cc6227424c7dd689ddc9f79efdd7b1b
