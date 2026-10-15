@@ -172,12 +172,12 @@ if (!requireNamespace("assertr", quietly = TRUE)) install.packages("assertr")
 library(assertr)
 
 # 1. Clean missing IDs and target values
-data_cleaned <- data |>
+data_cleaned = data |>
   filter(!is.na(id), !is.na(created)) |> # Remove rows without an ID or timestamp
   mutate(comms_num = dplyr::coalesce(comms_num, 0)) # Replace NA comment counts with 0
 
 # 2. Run quality assertions
-data_verified <- data_cleaned |>
+data_verified = data_cleaned |>
   verify(comms_num >= 0) |> # Engagement counts must be non-negative
   verify(!is.na(id)) |> # Reddit Post IDs must not be NA
   verify(!is.na(created)) |> # Timestamps must exist
@@ -185,10 +185,10 @@ data_verified <- data_cleaned |>
   verify(!is.na(body_sarcasm) & body_sarcasm >= 0 & body_sarcasm <= 100)
 
 # 3. Document dataset dimensions
-dim_source <- dim(data_wsb2022_sarcasm)
-dim_filtered <- dim(data_verified)
+dim_source = dim(data_wsb2022_sarcasm)
+dim_filtered = dim(data_verified)
 
-dim_summary <- tibble(
+dim_summary = tibble(
   Stage = c("Post-only Source Dataset", "Cleaned & Verified Dataset"),
   Rows = c(dim_source[1], dim_filtered[1]),
   Columns = c(dim_source[2], dim_filtered[2])
@@ -295,13 +295,13 @@ library(ggplot2)
 library(patchwork)
 
 # Target Variable: Raw vs. Log-Transformed Engagement
-p1 <- ggplot(data_verified, aes(x = comms_num)) +
+p1 = ggplot(data_verified, aes(x = comms_num)) +
   geom_histogram(bins = 50, fill = "#2b5c8f", color = "black", alpha = 0.8) +
   scale_y_log10() +
   labs(title = "Raw Comment Count (Log Y-Scale)", x = "comms_num", y = "Count (Log Scale)") +
   theme_minimal()
 
-p2 <- ggplot(data_verified, aes(x = log1p(comms_num))) +
+p2 = ggplot(data_verified, aes(x = log1p(comms_num))) +
   geom_histogram(bins = 50, fill = "#2e7d32", color = "black", alpha = 0.8) +
   labs(title = "Log Target: log(1 + comms_num)", x = "log1p(comms_num)", y = "Count") +
   theme_minimal()
@@ -310,7 +310,7 @@ p2 <- ggplot(data_verified, aes(x = log1p(comms_num))) +
 if (!requireNamespace("GGally", quietly = TRUE)) install.packages("GGally")
 library(GGally)
 
-matrix_vars <- data_verified |>
+matrix_vars = data_verified |>
   mutate(
     log_comms = log1p(as.numeric(comms_num)),
     log_score = log1p(as.numeric(score)),
@@ -328,7 +328,7 @@ ggpairs(
 ) + theme_minimal()
 
 #  Scatterplots with Non-Linear Smoothing Curves
-p_sarcasm <- ggplot(data_verified, aes(x = as.numeric(title_sarcasm), y = log1p(as.numeric(comms_num)))) +
+p_sarcasm = ggplot(data_verified, aes(x = as.numeric(title_sarcasm), y = log1p(as.numeric(comms_num)))) +
   geom_point(alpha = 0.03, color = "#1a237e", size = 0.8) +
   geom_smooth(method = "gam", color = "#d32f2f", size = 1.2, se = TRUE) +
   labs(
@@ -338,7 +338,7 @@ p_sarcasm <- ggplot(data_verified, aes(x = as.numeric(title_sarcasm), y = log1p(
   ) +
   theme_minimal()
 
-p_score <- ggplot(data_verified, aes(x = log1p(as.numeric(score)), y = log1p(as.numeric(comms_num)))) +
+p_score = ggplot(data_verified, aes(x = log1p(as.numeric(score)), y = log1p(as.numeric(comms_num)))) +
   geom_point(alpha = 0.03, color = "#004d40", size = 0.8) +
   geom_smooth(method = "lm", color = "#ff6f00", size = 1.2, se = TRUE) +
   labs(
