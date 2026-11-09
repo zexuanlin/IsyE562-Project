@@ -53,7 +53,7 @@ rm(list = ls(all.names = TRUE))
 
 ### Raw data and post-only filter
 
-```{r load-and-inspect-dataset, eval=FALSE}
+#```{r load-and-inspect-dataset, eval=FALSE}
 data_wsb2022_raw = read_csv("./data/wallstreetbets_2022.csv")
 
 data_wsb2022_raw |>

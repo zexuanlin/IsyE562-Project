@@ -1,0 +1,57 @@
+symbol,company,category,status,note
+GME,GameStop,meme,active,Jan 2021 squeeze
+AMC,AMC Entertainment,meme,active,Jan and Jun 2021 spikes
+BB,BlackBerry,meme,active,
+NOK,Nokia,meme,active,
+KOSS,Koss Corp,meme,active,
+CLOV,Clover Health,meme,active,
+SNDL,SNDL Inc,meme,active,
+TLRY,Tilray Brands,meme,active,
+SPCE,Virgin Galactic,meme,active,
+PLTR,Palantir Technologies,meme,active,
+BBBY,Bed Bath & Beyond,meme,delisted,Delisted 2023; Yahoo history may be missing
+EXPR,Express Inc,meme,delisted,Delisted 2024; Yahoo history may be missing
+DJT,Trump Media & Technology Group,meme,renamed,Traded as DWAC before Mar 2024
+AAPL,Apple,mega_cap_tech,active,
+MSFT,Microsoft,mega_cap_tech,active,
+AMZN,Amazon,mega_cap_tech,active,
+GOOGL,Alphabet,mega_cap_tech,active,
+META,Meta Platforms,mega_cap_tech,renamed,Traded as FB before Oct 2022
+NFLX,Netflix,mega_cap_tech,active,
+NVDA,NVIDIA,semis,active,10-for-1 split in 2024
+AMD,Advanced Micro Devices,semis,active,
+INTC,Intel,semis,active,
+SMCI,Super Micro Computer,semis,active,
+ARM,Arm Holdings,semis,active,IPO Sep 2023
+TSLA,Tesla,ev,active,Splits in 2020 and 2022
+RIVN,Rivian,ev,active,IPO Nov 2021
+LCID,Lucid Group,ev,active,
+NIO,NIO Inc,ev,active,
+COIN,Coinbase,fintech_crypto,active,Listed Apr 2021
+HOOD,Robinhood Markets,fintech_crypto,active,IPO Jul 2021
+MSTR,MicroStrategy,fintech_crypto,active,
+MARA,Marathon Digital,fintech_crypto,active,
+RIOT,Riot Platforms,fintech_crypto,active,
+AFRM,Affirm,fintech_crypto,active,
+UPST,Upstart,fintech_crypto,active,
+SOFI,SoFi Technologies,fintech_crypto,active,
+PYPL,PayPal,fintech_crypto,active,
+BABA,Alibaba,other,active,
+DIS,Walt Disney,other,active,
+RDDT,Reddit,other,active,IPO Mar 2024
+AI,C3.ai,other,active,
+CVNA,Carvana,other,active,
+DKNG,DraftKings,other,active,
+RBLX,Roblox,other,active,
+TWTR,Twitter,other,delisted,Taken private Oct 2022; Yahoo history may be missing
+SPY,SPDR S&P 500 ETF,etf,active,
+QQQ,Invesco QQQ Trust,etf,active,
+IWM,iShares Russell 2000 ETF,etf,active,
+TQQQ,ProShares UltraPro QQQ,etf,active,
+SQQQ,ProShares UltraPro Short QQQ,etf,active,
+SOXL,Direxion Daily Semiconductor Bull 3X,etf,active,
+UVXY,ProShares Ultra VIX Short-Term Futures,etf,active,
+TLT,iShares 20+ Year Treasury Bond ETF,etf,active,
+^GSPC,S&P 500 Index,index,active,"Index, not a stock"
+^IXIC,NASDAQ Composite,index,active,"Index, not a stock"
+^VIX,CBOE Volatility Index,index,active,"Index, not a stock; volume is not meaningful"
