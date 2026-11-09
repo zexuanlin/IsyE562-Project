@@ -5,3 +5,4 @@ data/*.csv
 .Rproj.user
 # do not include knitted Rmd html file
 *.html
+.Rhistory
