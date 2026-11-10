@@ -1,8 +1,21 @@
 ---
 title: "FA26 IsyE562 Project: Analysis Approach and Model Fit"
-author: "Zexuan Lin, Raheem Sultan Ali, Max Willemsen"
-date: "2026-11-07"
-output: html_notebook
+author: 
+  - Zexuan Lin
+  - Raheem Sultan Ali
+  - Max Willemsen
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    highlight: kate
+    code_folding: show
+    fig_width: 10
+    fig_height: 6
 ---
 
 ##Load libraries
@@ -53,7 +66,7 @@ rm(list = ls(all.names = TRUE))
 
 ### Raw data and post-only filter
 
-#```{r load-and-inspect-dataset, eval=FALSE}
+```{r load-and-inspect-dataset, eval=FALSE}
 data_wsb2022_raw = read_csv("./data/wallstreetbets_2022.csv")
 
 data_wsb2022_raw |>
@@ -245,6 +258,23 @@ wsb.cv = vfold_cv(wsb.train, v = 5, strata = high_engagement)
 c(train = nrow(wsb.train), test = nrow(wsb.test))
 ```
 
+### Parallel training
+
+Lasso tuning, random forest tuning, and random forest ablation cross-validation run across folds in parallel. Use at most one worker per fold and leave one available CPU core free when possible. On a single-core machine, training runs sequentially. Each forest uses one thread during cross-validation. Workers are released and the previous processing plan is restored after each step, including if training fails.
+
+```{r}
+parallel.workers = min(nrow(wsb.cv), parallelly::availableCores(omit = 1))
+
+with.parallel = function(expr) {
+  previous.plan = future::plan()
+  on.exit(future::plan(previous.plan), add = TRUE)
+  future::plan(future::multisession, workers = parallel.workers)
+  force(expr)
+}
+
+parallel.workers
+```
+
 ## Predictor sets, recipes, and helper functions
 
 ```{r}
@@ -296,13 +326,15 @@ class.metrics = metric_set(accuracy, roc_auc, precision, recall, f_meas)
 reg.metrics = metric_set(rmse, mae, rsq)
 
 # cross validation wrapper (same folds for every model)
-fit.cv = function(wf, metrics) {
+fit.cv = function(wf, metrics, parallel = FALSE) {
   set.seed(42)
   fit_resamples(
     wf,
     resamples = wsb.cv,
     metrics = metrics,
-    control = control_resamples(save_pred = TRUE)
+    control = control_resamples(
+      save_pred = TRUE, allow_par = parallel, parallel_over = "resamples"
+    )
   )
 }
 
@@ -488,12 +520,14 @@ lasso.wf = workflow() %>%
 lasso.grid = grid_regular(penalty(range = c(-5, -1)), levels = 20)
 
 set.seed(42)
-lasso.tune.res = tune_grid(
-  lasso.wf,
-  resamples = wsb.cv,
-  grid = lasso.grid,
-  metrics = reg.metrics,
-  control = control_grid(save_pred = TRUE)
+lasso.tune.res = with.parallel(
+  tune_grid(
+    lasso.wf,
+    resamples = wsb.cv,
+    grid = lasso.grid,
+    metrics = reg.metrics,
+    control = control_grid(save_pred = TRUE, parallel_over = "resamples")
+  )
 )
 ```
 
@@ -534,8 +568,9 @@ Expanded features plus sarcasm. `mtry` and `min_n` are tuned over the shared CV 
 ```{r}
 rf.trees = 300
 
-rf.spec = rand_forest(mtry = tune(), min_n = tune(), trees = rf.trees) %>%
-  set_engine("ranger", respect.unordered.factors = "order") %>%
+# Embed fixed settings in the specification so workers do not need global variables.
+rf.spec = rand_forest(mtry = tune(), min_n = tune(), trees = !!rf.trees) %>%
+  set_engine("ranger", num.threads = 1, respect.unordered.factors = "order") %>%
   set_mode("regression")
 
 rf1.rec = make.recipe("log_comms", c(exp.vars, sarc.vars), linear.prep = FALSE)
@@ -548,12 +583,14 @@ rf.wf = workflow() %>%
 rf.grid = grid_regular(mtry(range = c(3L, 12L)), min_n(range = c(10L, 100L)), levels = 3)
 
 set.seed(42)
-rf.tune.res = tune_grid(
-  rf.wf,
-  resamples = wsb.cv,
-  grid = rf.grid,
-  metrics = reg.metrics,
-  control = control_grid(save_pred = TRUE)
+rf.tune.res = with.parallel(
+  tune_grid(
+    rf.wf,
+    resamples = wsb.cv,
+    grid = rf.grid,
+    metrics = reg.metrics,
+    control = control_grid(save_pred = TRUE, parallel_over = "resamples")
+  )
 )
 ```
 
@@ -592,15 +629,15 @@ rf1.final = fit(rf1.final.wf, wsb.train)
 Same tuned hyperparameters and same folds, sarcasm features removed.
 
 ```{r}
-rf.cv.spec = rand_forest(mtry = rf.best$mtry, min_n = rf.best$min_n, trees = rf.trees) %>%
-  set_engine("ranger", respect.unordered.factors = "order") %>%
+rf.cv.spec = rand_forest(mtry = !!rf.best$mtry, min_n = !!rf.best$min_n, trees = !!rf.trees) %>%
+  set_engine("ranger", num.threads = 1, respect.unordered.factors = "order") %>%
   set_mode("regression")
 
 rf0.wf = workflow() %>%
   add_model(rf.cv.spec) %>%
   add_recipe(rf0.rec)
 
-rf0.cv = fit.cv(rf0.wf, reg.metrics)
+rf0.cv = with.parallel(fit.cv(rf0.wf, reg.metrics, parallel = TRUE))
 
 set.seed(42)
 rf0.final = fit(rf0.wf, wsb.train)
