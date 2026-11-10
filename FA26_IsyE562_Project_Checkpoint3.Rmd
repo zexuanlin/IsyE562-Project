@@ -163,8 +163,10 @@ model.df = data_verified %>%
     ny_hour = lubridate::hour(ny_dt),
     market_open = yn(ny_hour >= 9 & ny_hour < 16),
     ny_hour_f = factor(ny_hour, levels = 0:23),
-    ny_dow = factor(lubridate::wday(ny_dt, week_start = 1), levels = 1:7,
-                    labels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")),
+    ny_dow = factor(lubridate::wday(ny_dt, week_start = 1),
+      levels = 1:7,
+      labels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    ),
     post_year = factor(lubridate::year(ny_dt)),
     # post type from url
     post_type = factor(
@@ -192,14 +194,17 @@ model.df = data_verified %>%
     log_comms = log1p(comms_num),
     # first factor level is treated as the "event" by yardstick
     high_engagement = factor(if_else(comms_num > engagement_threshold, "high", "low"),
-                             levels = c("high", "low"))
+      levels = c("high", "low")
+    )
   ) %>%
-  select(post_id = id, comms_num, log_comms, high_engagement,
-         title_sarcasm, body_sarcasm,
-         log_body_words, no_body, market_open,
-         log_title_chars, title_caps_ratio, title_has_question, title_has_exclaim,
-         title_has_ticker, title_has_emoji, title_has_kw,
-         post_type, ny_dow, ny_hour_f, post_year)
+  select(
+    post_id = id, comms_num, log_comms, high_engagement,
+    title_sarcasm, body_sarcasm,
+    log_body_words, no_body, market_open,
+    log_title_chars, title_caps_ratio, title_has_question, title_has_exclaim,
+    title_has_ticker, title_has_emoji, title_has_kw,
+    post_type, ny_dow, ny_hour_f, post_year
+  )
 
 head(model.df)
 skim(model.df)
@@ -242,8 +247,10 @@ c(train = nrow(wsb.train), test = nrow(wsb.test))
 # predictor sets
 base.vars = c("log_body_words", "no_body", "market_open")
 sarc.vars = c("title_sarcasm", "body_sarcasm")
-title.vars = c("log_title_chars", "title_caps_ratio", "title_has_question",
-               "title_has_exclaim", "title_has_ticker", "title_has_emoji", "title_has_kw")
+title.vars = c(
+  "log_title_chars", "title_caps_ratio", "title_has_question",
+  "title_has_exclaim", "title_has_ticker", "title_has_emoji", "title_has_kw"
+)
 ctx.vars = c("post_type", "ny_dow", "ny_hour_f", "post_year")
 # market_open is dropped in the expanded set since ny_hour_f already contains it
 exp.vars = c("log_body_words", "no_body", title.vars, ctx.vars)
@@ -318,8 +325,10 @@ collect.test = function(fit, name, type) {
       score = if (type == "class") .pred_high else .pred,
       pred_log = if (type == "reg") .pred else NA_real_
     ) %>%
-    select(model, post_id, comms_num, log_comms, high_engagement, post_type,
-           post_year, ny_dow, title_sarcasm, score, pred_log)
+    select(
+      model, post_id, comms_num, log_comms, high_engagement, post_type,
+      post_year, ny_dow, title_sarcasm, score, pred_log
+    )
 }
 ```
 
@@ -481,7 +490,7 @@ lasso.tune.res = tune_grid(
 ```
 
 ```{r}
-##Plot the results
+## Plot the results
 lasso.tuning.results = lasso.tune.res %>%
   collect_metrics() %>%
   filter(.metric == "rmse" | .metric == "rsq") %>%
@@ -541,7 +550,7 @@ rf.tune.res = tune_grid(
 ```
 
 ```{r}
-##Plot the results
+## Plot the results
 rf.tuning.results = rf.tune.res %>%
   collect_metrics() %>%
   filter(.metric == "rmse")
@@ -651,8 +660,10 @@ auc.summary = cv.auc %>%
   arrange(model)
 
 auc.summary %>%
-  kable(digits = 3, col.names = c("Model", "CV AUC (mean)", "CV AUC (SD)", "Test AUC"),
-        caption = "ROC AUC for High vs. Low Engagement")
+  kable(
+    digits = 3, col.names = c("Model", "CV AUC (mean)", "CV AUC (SD)", "Test AUC"),
+    caption = "ROC AUC for High vs. Low Engagement"
+  )
 ```
 
 ```{r}
@@ -681,8 +692,10 @@ ablation = cv.auc.wide %>%
 
 ablation %>%
   group_by(model.family) %>%
-  summarise(mean_delta = mean(delta_auc), sd_delta = sd(delta_auc),
-            min_delta = min(delta_auc), max_delta = max(delta_auc)) %>%
+  summarise(
+    mean_delta = mean(delta_auc), sd_delta = sd(delta_auc),
+    min_delta = min(delta_auc), max_delta = max(delta_auc)
+  ) %>%
   kable(digits = 4, caption = "Change in CV AUC from adding sarcasm features")
 
 ggplot(ablation, aes(x = model.family, y = delta_auc)) +
