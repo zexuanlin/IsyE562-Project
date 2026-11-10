@@ -29,6 +29,7 @@ library(ggpubr)
 library(patchwork)
 library(GGally)
 library(assertr)
+library(ranger)
 library(tidymodels)
 
 # engines used below (install if needed): glmnet (lasso), ranger (random forest)
@@ -159,7 +160,9 @@ dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
 
 ## Build the modeling data set
 
-Create the outcomes and all candidate features. Only information available at posting time is used. `score` is excluded because it accrues after the post is created.
+Create the outcomes and all candidate features. The predictor sets below use information available at posting time. `score` is excluded because it accrues after the post is created.
+
+The new ticker and gain/loss columns are retained as candidate features. For titles with multiple cashtags, use the first `$TICKER`; symbols are converted to uppercase, with share-class dots converted to hyphens for matching. Daily stock direction compares the closing price on the post's New York date with the previous trading day's close: `UP`, `DOWN`, or `FLAT`. Unavailable prices, unlisted tickers, and non-trading dates remain `NA`. Same-day closing direction is retrospective for posts made before the close and is not included in the current predictor sets.
 
 ```{r}
 # threshold for "high" engagement (median comment count)
@@ -173,10 +176,54 @@ yn = function(x) factor(if_else(x, "yes", "no"), levels = c("no", "yes"))
 
 # nolint end
 
+# Ticker references and daily prices. The price CSV has two header rows
+# (price field, then ticker), followed by a Date row before the observations.
+ticker.pattern = "\\$\\^?[A-Za-z]{1,5}(?:[.-][A-Za-z])?\\b"
+normalize.ticker = function(x) stringr::str_replace_all(stringr::str_to_upper(x), stringr::fixed("."), "-")
+
+popular.tickers = read_csv("./reference/popular_tickers.csv", show_col_types = FALSE) %>%
+  pull(symbol) %>%
+  stringr::str_trim() %>%
+  normalize.ticker()
+
+price.header = data.table::fread(
+  "./data/SnP_daily_update.csv",
+  header = FALSE, nrows = 2, colClasses = "character", showProgress = FALSE
+)
+close.columns = which(as.character(price.header[1, ]) == "Close")
+close.tickers = normalize.ticker(as.character(price.header[2, close.columns, with = FALSE]))
+
+daily.close = data.table::fread(
+  "./data/SnP_daily_update.csv",
+  skip = 3, header = FALSE, select = c(1L, close.columns),
+  col.names = c("post_date", close.tickers), showProgress = FALSE
+)
+
+daily.moves = as_tibble(daily.close) %>%
+  mutate(post_date = as.Date(post_date)) %>%
+  pivot_longer(-post_date, names_to = "title_ticker", values_to = "close") %>%
+  group_by(title_ticker) %>%
+  arrange(post_date, .by_group = TRUE) %>%
+  mutate(
+    previous_close = lag(close),
+    ticker_daily_direction = factor(
+      case_when(
+        is.na(close) | is.na(previous_close) ~ NA_character_,
+        close > previous_close ~ "UP",
+        close < previous_close ~ "DOWN",
+        TRUE ~ "FLAT"
+      ),
+      levels = c("DOWN", "FLAT", "UP")
+    )
+  ) %>%
+  ungroup() %>%
+  select(post_date, title_ticker, ticker_daily_direction)
+
 model.df = data_verified %>%
   mutate(
     # posting time in New York
     ny_dt = lubridate::with_tz(lubridate::as_datetime(created, tz = "UTC"), tzone = "America/New_York"),
+    post_date = as.Date(ny_dt, tz = "America/New_York"),
     ny_hour = lubridate::hour(ny_dt),
     market_open = yn(ny_hour >= 9 & ny_hour < 16),
     ny_hour_f = factor(ny_hour, levels = 0:23),
@@ -204,9 +251,17 @@ model.df = data_verified %>%
     title_caps_ratio = stringr::str_count(title, "[A-Z]") / pmax(stringr::str_count(title, "[A-Za-z]"), 1),
     title_has_question = yn(stringr::str_detect(title, "\\?")),
     title_has_exclaim = yn(stringr::str_detect(title, "!")),
-    title_has_ticker = yn(stringr::str_detect(title, "\\$[A-Za-z]{1,5}\\b")),
+    title_ticker = normalize.ticker(stringr::str_remove(stringr::str_extract(title, ticker.pattern), stringr::fixed("$"))),
+    title_has_ticker = yn(!is.na(title_ticker)),
+    title_ticker_popular = yn(if_else(is.na(title_ticker), NA, title_ticker %in% popular.tickers)),
     title_has_emoji = yn(stringr::str_detect(title, "\\p{So}")),
-    title_has_kw = yn(stringr::str_detect(title, "(?i)\\b(yolo|dd|gain|gains|loss|loss porn)\\b")), # starting keyword list
+    # Independent flags preserve titles that mention both gains and losses.
+    title_has_gain = yn(stringr::str_detect(title, "(?i)\\bgains?\\b")),
+    title_has_loss = yn(stringr::str_detect(title, "(?i)\\bloss(?:es)?\\b")),
+    title_has_kw = yn(
+      stringr::str_detect(title, "(?i)\\b(yolo|dd)\\b") |
+        title_has_gain == "yes" | title_has_loss == "yes"
+    ),
     # outcomes
     log_comms = log1p(comms_num),
     # first factor level is treated as the "event" by yardstick
@@ -214,13 +269,15 @@ model.df = data_verified %>%
       levels = c("high", "low")
     )
   ) %>%
+  left_join(daily.moves, by = c("post_date", "title_ticker"), relationship = "many-to-one") %>%
   select(
     post_id = id, comms_num, log_comms, high_engagement,
     title_sarcasm, body_sarcasm,
     log_body_words, no_body, market_open,
     log_title_chars, title_caps_ratio, title_has_question, title_has_exclaim,
-    title_has_ticker, title_has_emoji, title_has_kw,
-    post_type, ny_dow, ny_hour_f, post_year
+    title_has_ticker, title_ticker, title_ticker_popular, ticker_daily_direction,
+    title_has_emoji, title_has_kw, title_has_gain, title_has_loss,
+    post_type, post_date, ny_dow, ny_hour_f, post_year
   )
 
 head(model.df)

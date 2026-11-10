@@ -6,3 +6,10 @@ Use the WSB dataset as an example.
 - Unzip and you should see a `.csv` file (about 211 MiB)
 
 Now you should be able to read the data.
+
+## Stock price dataset
+
+[kaggle
+link](https://www.kaggle.com/datasets/yash16jr/s-and-p500-daily-update-dataset)
+
+Download, unzip, and place `SnP_daily_update.csv` under `data` folder.
