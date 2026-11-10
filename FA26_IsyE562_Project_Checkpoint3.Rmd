@@ -154,7 +154,11 @@ engagement_threshold = median(data_verified$comms_num)
 engagement_threshold
 
 # helper: logical -> yes/no factor
+# nolint start: object_usage_linter
+
 yn = function(x) factor(if_else(x, "yes", "no"), levels = c("no", "yes"))
+
+# nolint end
 
 model.df = data_verified %>%
   mutate(
@@ -268,6 +272,8 @@ model.levels = c(m.null, m.lr0, m.lr1, m.lm0, m.lm1, m.lasso, m.rf0, m.rf1)
 ```
 
 ```{r}
+# nolint start: object_usage_linter.
+
 # recipe builder: linear.prep = TRUE normalizes + dummy codes (linear models),
 # FALSE leaves factors alone (random forest). ns.sarcasm adds a spline on title sarcasm.
 make.recipe = function(outcome, predictors, ns.sarcasm = FALSE, linear.prep = TRUE) {
@@ -330,6 +336,8 @@ collect.test = function(fit, name, type) {
       post_year, ny_dow, title_sarcasm, score, pred_log
     )
 }
+
+# nolint end
 ```
 
 ## Null model (reference)
