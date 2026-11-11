@@ -57,11 +57,12 @@ A random seed `42` is set for replicable analysis.
 The baseline uses `log_body_words`, `no_body`, and `market_open`, with an additional version including linear title and body sarcasm terms. Expanded models add post type, NY posting hour, day of week, year, and title length, caps ratio, punctuation, ticker, emoji, and keyword flags. Expanded linear regression and lasso use a spline for title sarcasm. Linear-model recipes normalize numeric predictors and dummy-code factors; the random forest retains factors. `score` is excluded because it accrues after posting. Comparing the reduced baseline with expanded models measures the combined benefit of additional features and model flexibility; expanded linear regression provides a closer reference for lasso and random forest using the same predictor information.
 
 All our models are trying to predict the log-transformed comment count for each
-post (`log(1+comment_count)`)
+post (`log(1+comment_count)`), so the log transform
+compresses the right tail, and the +1 keeps posts with zero comments.
 We have the following models being tested and compared in our project:
 
 - Base model: 
-  - Model type: Simple linear regression
+  - Model type: linear regression
   - Predictor:  
     - `log_body_words`: Log transformed word count for post body
     - `no_body`: Whether the post have post body at all (due to post being
@@ -238,9 +239,11 @@ dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
 
 ## Build the modeling data set
 
-Create the outcomes and all candidate features. The predictor sets below use information available at posting time. `score` is excluded because it accrues after the post is created.
+Here we have added new metrics. We made the metric of high_engagement which is when a post has more than the median number of comments, which is 26. It is used as a helper label and not the target
 
-The new ticker and gain/loss columns are retained as candidate features. For titles with multiple cashtags, use the first `$TICKER`; symbols are converted to uppercase, with share-class dots converted to hyphens for matching. Daily stock direction compares the closing price on the post's New York date with the previous trading day's close: `UP`, `DOWN`, or `FLAT`. Unavailable prices, unlisted tickers, and non-trading dates remain `NA`. Same-day closing direction is retrospective for posts made before the close and is not included in the current predictor sets.
+We also created the outcomes and all candidate features. The predictor sets below use information available at posting time. `score` is excluded because it accrues after the post is created. The distinction of post type we have made based on the URL. 
+
+x 
 
 ```{r}
 # threshold for "high" engagement (median comment count)
@@ -380,7 +383,7 @@ model.df %>%
 
 ## Train / test split and cross-validation folds
 
-All models below use this same split and these same folds.
+All models below use this same split and these same folds. We used set.seed(42) to make the process repeatable and chose the standard 80/20 split, stratified on high_engagement. This gives about 76k training and 19k test rows, and keeps the high/low balance even though the models predict a continuous response. The 5-fold stratified CV on the training set ensures each model is scored on five different held-out portions of the data, so we can tune and compare models without touching the test set. We note that random vs. time-based splitting is a limitation because posts span 2021 to 2025, so a random split lets models learn from later posts to predict earlier ones and does not test forecasting of future posts.
 
 ```{r}
 set.seed(42)
@@ -413,6 +416,8 @@ parallel.workers
 ```
 
 ## Predictor sets, recipes, and helper functions
+Predictors are grouped into a reduced baseline set, a sarcasm set, and an expanded set. A common recipe normalizes numeric predictors and dummy-codes factors for the linear models (the random forest keeps factors as is), and every model is cross-validated on the same folds and scored with RMSE, MAE and R².
+
 
 ```{r}
 # predictor sets
@@ -511,6 +516,7 @@ collect.test = function(fit, name) {
 ```
 
 ## Null model (reference)
+>the null model or the dummy model predicts the mean. It gives AUC 0.5 and RMSE of about 1.57, the SD of log-comments, and it’s the reference that everything else must beat. 
 
 ```{r}
 null.mod = null_model() %>%
@@ -530,7 +536,7 @@ null.cv %>%
 
 ## Linear regression on log1p(comments): reduced-feature baseline
 
-Use three predictors: log body word count, whether the body is missing, and whether the post was made during market hours. The second version adds title and body sarcasm as linear terms. Both predict the same log comment count as the expanded models; no spline or interaction is used in this baseline.
+The baseline is a linear regression of log(1 + comments) on log body word count, whether the post has a body, and whether it was posted during market hours, fit with and without linear title and body sarcasm scores. It sets the floor that later models must beat. 
 
 ```{r}
 lm.mod = linear_reg() %>%
@@ -548,7 +554,7 @@ blm1.wf
 ```
 
 ### Cross-validated performance
-
+Under 5-fold CV the baseline is barely better than the null model: RMSE is 1.566 without sarcasm and 1.565 with it (null: 1.571), and R² is under 1%. MAE (about 1.20) is no better than the null’s 1.199.
 ```{r}
 blm0.cv = fit.cv(blm0.wf, reg.metrics)
 blm1.cv = fit.cv(blm1.wf, reg.metrics)
@@ -562,6 +568,7 @@ bind_rows(
 ```
 
 ### Final fit and test set performance
+
 
 ```{r}
 blm0.final = fit(blm0.wf, wsb.train)
@@ -589,7 +596,7 @@ baseline.test.pred %>%
 
 ### Coefficients
 
-Coefficients describe changes in predicted `log(1 + comms_num)` per one standard deviation increase in a numeric predictor, or for the "yes" versus "no" level of a dummy predictor, holding other predictors fixed. These are log-scale coefficients, not odds ratios.
+Coefficients are changes in predicted log comments per 1 SD (or yes vs. no). Posts without a body (−0.50), longer bodies (−0.23 per SD) and market-hours posting (−0.11) are associated with fewer comments, and body sarcasm with slightly more (+0.06 per SD). Title sarcasm is not significant (CI includes 0).
 
 ```{r}
 blm1.coefs = blm1.final %>%
@@ -608,8 +615,9 @@ blm1.coefs %>%
   theme_light()
 ```
 
-> **[PLACEHOLDER: Baseline model discussion]**
-> Summarize the baseline performance (CV vs. test metrics), which features matter most, whether sarcasm changes performance, and obvious weaknesses (e.g., linear sarcasm term vs. the non-linear trend seen in Checkpoint 2, few features).
+## Baseline model discussion:
+The baseline explains under 1% of the variance and is essentially at the null level; adding sarcasm lowers RMSE by less than 0.001. It uses few predictors, treats sarcasm as linear, and omits timing and post-type information, which motivates the expanded models. 
+
 
 # 3 Advanced model fit
 
