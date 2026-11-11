@@ -40,20 +40,104 @@ rm(list = ls(all.names = TRUE))
 
 # 1 Analysis approach
 
-> **[PLACEHOLDER: Analysis type and project question]**
-> Supervised learning to predict post engagement (`comms_num`) on r/wallstreetbets. Sarcasm score is the novel feature; it is one candidate predictor among several. Describe why supervised learning fits and how the work is framed (what predicts engagement best, and does sarcasm add anything beyond the other features?).
+Our project uses **supervised ML** to predict engagement of reddit posts on
+subreddit `r/wallstreetbets`. We also extend the original dataset with some
+existing sentiment analysis tool to detect the presence of sarcasm in post
+titles and/or post bodies, which is explained in checkpoint 2 and is omitted in
+the current analysis.
 
-All models predict the same continuous response, `log_comms = log1p(comms_num)`. The log transform compresses the heavy right tail while retaining posts with zero comments. The simple baseline is an ordinary linear regression with a few predictors; expanded linear regression, lasso, and random forest use the same response, so their prediction errors are directly comparable. The binary `high_engagement` label (comment count above the dataset median) is retained only for stratification and a secondary ROC AUC analysis of engagement ranking.
-
-With `set.seed(42)`, allocate 80% of posts to training and 20% to testing, stratified on `high_engagement`. Use the same five stratified cross-validation folds within training for every model. Recipes estimate preprocessing parameters within each analysis fold, and final workflows are refitted on the full training set. The random split evaluates held-out posts from the historical mixture; because posts span Jan 2021 to Mar 2025, a chronological split would be needed to assess prediction of future posts.
-
-Fit the baseline linear regression, expanded linear regression, and random forest with and without sarcasm on identical folds. Compare paired fold-level differences in log-scale RMSE; a negative difference (with minus without sarcasm) indicates improvement. The random forest ablation holds the hyperparameters selected with sarcasm fixed. A null regression predicting the training mean of `log_comms` provides the reference.
+To create the dataset for ML, we allocate 80% of posts to training and 20% to testing,
+stratified on `high_engagement` (whether the comment count exceeds the median.)
+We use the same five stratified cross-validation folds within training for every model. 
+Recipes estimate preprocessing parameters within each analysis fold,
+and final workflows are refitted on the full training set. The random split 
+evaluates held-out posts from the historical mixture for posts span across Jan 2021 to Mar 2025.
+A random seed `42` is set for replicable analysis.
 
 The baseline uses `log_body_words`, `no_body`, and `market_open`, with an additional version including linear title and body sarcasm terms. Expanded models add post type, NY posting hour, day of week, year, and title length, caps ratio, punctuation, ticker, emoji, and keyword flags. Expanded linear regression and lasso use a spline for title sarcasm. Linear-model recipes normalize numeric predictors and dummy-code factors; the random forest retains factors. `score` is excluded because it accrues after posting. Comparing the reduced baseline with expanded models measures the combined benefit of additional features and model flexibility; expanded linear regression provides a closer reference for lasso and random forest using the same predictor information.
 
-Unpenalized linear regressions have no tuned hyperparameters. Tune lasso's `penalty` on a log-spaced grid with `mixture = 1`, and random forest's `mtry` and `min_n` on a regular grid with a fixed number of trees. Use `tune_grid()` over the shared training folds and select the lowest RMSE before refitting on the full training set.
+All our models are trying to predict the log-transformed comment count for each
+post (`log(1+comment_count)`)
+We have the following models being tested and compared in our project:
 
-The primary comparison uses RMSE on `log_comms`, with MAE and R-squared as supporting metrics, for every model. Secondary ROC AUC uses each model's predicted log count to rank the same high/low engagement outcome; it does not measure count accuracy. Cross-validation results for selected tuning parameters may be optimistic, so the held-out test results provide the final performance assessment. Package versions are recorded in `renv.lock`.
+- Base model: 
+  - Model type: Simple linear regression
+  - Predictor:  
+    - `log_body_words`: Log transformed word count for post body
+    - `no_body`: Whether the post have post body at all (due to post being
+    link-only, image only...)
+    - `market_open`: Whether the post was posted at a time when NYSE was during
+      regular opening hours 
+- Advanced model 1 (linear, extended features):
+  - Model type: Multiple linear regression, fitted through tidymodels with the
+    `lm` engine. This model extends the baseline with more information about
+    the title, post type, and posting time.
+  - Predictor:
+    - `log_body_words`: Log transformed word count for post body
+    - `no_body`: Whether the post body is missing or empty
+    - `log_title_chars`: Log transformed number of characters in the title
+    - `title_caps_ratio`: Proportion of letters in the title that are uppercase
+    - `title_has_question`: Whether the title contains a question mark
+    - `title_has_exclaim`: Whether the title contains an exclamation mark
+    - `title_has_ticker`: Whether the title contains a `$TICKER` cashtag
+    - `title_has_emoji`: Whether the title contains an emoji or other symbol
+    - `title_has_kw`: Whether the title contains keywords such as YOLO, DD,
+      gain, gains, loss, or losses
+    - `post_type`: Type of post inferred from its URL: text, image, video,
+      gallery, or link
+    - `ny_dow`: Day of the week when the post was created, in New York time
+    - `ny_hour_f`: Posting hour in New York time, treated as a categorical variable
+    - `post_year`: Year when the post was created
+  - Sarcasm comparison: We test this model with and without `title_sarcasm`
+    and `body_sarcasm`. In the version with sarcasm, `title_sarcasm` uses a
+    [natural spline with four degrees of freedom](https://recipes.tidymodels.org/reference/step_ns.html)
+    to allow a nonlinear relationship with log comment count, while
+    `body_sarcasm` enters as a linear term.
+  - Preprocessing: Numeric predictors are standardized, categorical predictors
+    are dummy coded, and predictors with zero variance are removed.
+    `market_open` is replaced by the more detailed `ny_hour_f` variable.
+  - Hyperparameters: No hyperparameters are tuned; the spline degrees of
+    freedom are fixed at four.
+- Advanced model 2 (lasso, extended features):
+  - Model type: Lasso regression
+    fitted through tidymodels with the `glmnet` engine. This is a linear model
+    with an L1 penalty that shrinks coefficients and can set some coefficients
+    to zero, providing variable selection and helping control overfitting.
+  - Predictor: The same expanded predictors as advanced model 1, including
+    both `title_sarcasm` and `body_sarcasm`. Title sarcasm uses the same
+    natural spline with four degrees of freedom, while body sarcasm enters
+    as a linear term. The current lasso model includes sarcasm only.
+  - Preprocessing: The same standardization, dummy coding, and removal of
+    predictors with zero variance as advanced model 1.
+  - Hyperparameters: `mixture = 1` specifies a pure lasso penalty. We tune
+    `penalty` over 20 logarithmically spaced values from `10^-5` to `10^-1`,
+    choosing the value with the lowest mean log-scale RMSE across the five
+    training cross-validation folds.
+- Advanced model 3 (random forest, extended features):
+  - Model type: Random forest regression
+    fitted through tidymodels with the `ranger` engine. This model averages
+    predictions from 300 decision trees and can capture nonlinear relationships
+    and interactions between predictors.
+  - Predictor: The same expanded predictors as advanced model 1. The version
+    with sarcasm adds the original `title_sarcasm` and `body_sarcasm` scores;
+    no spline transformation is applied because the trees can model nonlinear
+    relationships directly.
+  - Sarcasm comparison: We test versions with and without the two sarcasm
+    scores. The version without sarcasm uses the hyperparameters selected for
+    the version with sarcasm, keeping these settings fixed for the comparison.
+  - Preprocessing: Numeric predictors retain their original scales, and
+    categorical predictors remain factors rather than being dummy coded.
+  - Hyperparameters: The number of trees is fixed at 300. We tune `mtry`
+    (number of candidate predictors considered at each split) from 3 to 12
+    and `min_n` (minimum node size for splitting) from 10 to 100, using three
+    values for each parameter to create nine combinations. We select the
+    combination with the lowest mean log-scale RMSE across the same five
+    training cross-validation folds.
+
+The primary comparison uses RMSE on `log_comms`, with MAE and R-squared as supporting metrics, for every model. 
+Secondary ROC AUC uses each model's predicted log count to rank the same high/low engagement outcome; 
+it does not measure count accuracy. Cross-validation results for selected tuning parameters may be optimistic, 
+so the held-out test results provide the final performance assessment. Package versions are recorded in `renv.lock`.
 
 # 2 Baseline model fit
 
@@ -117,7 +201,7 @@ data = data_wsb2022_sarcasm |>
     link_only = {
       body_text = stringr::str_trim(dplyr::coalesce(body, ""))
       (stringr::str_detect(body_text, "(?i)^https?://\\S+$") |
-         stringr::str_detect(body_text, "(?i)^\\[[^\\]]+\\]\\(https?://\\S+\\)$")) &
+        stringr::str_detect(body_text, "(?i)^\\[[^\\]]+\\]\\(https?://\\S+\\)$")) &
         !stringr::str_detect(
           body_text,
           "(?i)https?://(?:[a-z0-9-]+\\.)*(?:reddit\\.com|redd\\.it)(?=[:/?#]|$)"
