@@ -140,8 +140,8 @@ Secondary ROC AUC uses each model's predicted log count to rank the same high/lo
 it does not measure count accuracy. Cross-validation results for selected tuning parameters may be optimistic, 
 so the held-out test results provide the final performance assessment. Package versions are recorded in `renv.lock`.
 
-# 2 Baseline model fit
-
+#  Baseline model fit
+This section builds the reference point for the project. We load and clean the post data, define the outcome and predictors, split the data once into training and test sets with shared cross-validation folds, and fit a simple linear regression of log(1 + comments) on three predictors (body length, whether the post has a body, and market-hours posting), with and without the sarcasm scores. A null model that predicts the training mean sets the floor. The advanced models in the next section are judged against these results.
 ## Data loading and processing
 
 ### Raw data and post-only filter
@@ -620,10 +620,10 @@ The baseline explains under 1% of the variance and is essentially at the null le
 
 
 # 3 Advanced model fit
-
+The advanced models predict the same log(1 + comments) target with an expanded predictor set (post type, NY posting hour, day of week, year and title features), with and without sarcasm where applicable.
 ## Log-linear regression on log1p(comments), expanded features
+This is the same expanded feature set with and without sarcasm. With sarcasm, title sarcasm enters as a spline to capture the non-linear trend. The expanded linear model lowers test RMSE from 1.56 (baseline) to 1.47 and raises R² from under 0.01 to 0.114. The largest effects are early-morning posting hours (positive), link and gallery posts (fewer comments), longer titles (more) and longer bodies (fewer). Sarcasm adds a small gain (CV RMSE 1.485 → 1.479).
 
-Same expanded feature set with and without sarcasm. With sarcasm, title sarcasm enters as a spline to capture the non-linear trend.
 
 ```{r}
 lm0.wf = workflow() %>%
@@ -658,8 +658,7 @@ lm1.final %>%
 ```
 
 ## Lasso regression
-
-Expanded features plus sarcasm. `penalty` is tuned over the shared CV folds.
+The lasso penalty was tuned over a log-spaced grid from 10⁻⁵ to 10⁻¹ (best: 0.000113), keeping 51 non-zero terms. Its performance is identical to the expanded linear model (CV RMSE 1.479, R² 0.114), because with 76,167 training posts and a modest number of predictors there is little for regularization to fix. Only a with-sarcasm lasso was fit, so it has no ablation.
 
 ```{r}
 lasso.spec = linear_reg(penalty = tune(), mixture = 1) %>%
@@ -715,7 +714,7 @@ lasso.final %>%
 
 ## Random forest
 
-Expanded features plus sarcasm. `mtry` and `min_n` are tuned over the shared CV folds (this step can take several minutes).
+The random forest (300 trees) was tuned over mtry (3 to 12) and min_n (10 to 100) in a 3×3 grid; the best setting was mtry = 3 and min_n = 10. It is the most accurate model (CV RMSE 1.307, test RMSE 1.303, R² 0.31), suggesting non-linear or interaction effects that the linear models miss. Both best values sit at the low edge of the grid, so a wider search might improve it slightly.
 
 ```{r}
 rf.trees = 300
@@ -778,8 +777,7 @@ rf1.final = fit(rf1.final.wf, wsb.train)
 
 ### Random forest without sarcasm (ablation)
 
-Same tuned hyperparameters and same folds, sarcasm features removed.
-
+The same forest without sarcasm has CV RMSE 1.318 (R² 0.296), vs. 1.307 (R² 0.308) with it, so sarcasm helps modestly. This model reuses the hyperparameters tuned with sarcasm, which may slightly favor the sarcasm model.
 ```{r}
 rf.cv.spec = rand_forest(mtry = !!rf.best$mtry, min_n = !!rf.best$min_n, trees = !!rf.trees) %>%
   set_engine("ranger", num.threads = 1, respect.unordered.factors = "order") %>%
@@ -796,7 +794,7 @@ rf0.final = fit(rf0.wf, wsb.train)
 ```
 
 ### Variable importance
-
+Permutation importance ranks body length, post type and title length as the features the forest relies on most, followed by body sarcasm and posting hour. Body sarcasm ranks fourth, ahead of posting hour, while title sarcasm ranks seventh, so sarcasm contributes to the forest’s predictions even though its gain in RMSE is small (about 0.01). Importance shows reliance, not direction or causation.
 ```{r}
 rf1.importance = rf1.final %>%
   extract_fit_engine() %>%
@@ -809,9 +807,8 @@ ggplot(rf1.importance, aes(x = importance, y = reorder(feature, importance))) +
   theme_light()
 ```
 
-> **[PLACEHOLDER: Advanced model discussion]**
-> Describe the tuned hyperparameters, which features the lasso retained, which features the random forest relies on, and how the additional features changed performance relative to the baseline.
-
+## Advanced model discussion
+The advanced models predict the same log(1 + comments) target with an expanded predictor set (post type, NY posting hour, day of week, year and title features). Test RMSE falls from 1.56 (baseline) to 1.47 (expanded linear and lasso) and 1.30 (random forest), and R² rises from 0.007 to 0.114 and 0.307, so most of the gain comes from the expanded features and non-linear modeling, not from sarcasm. Lasso (penalty 0.000113, 51 non-zero terms) matches the expanded linear model, since there is little to regularize with 76,167 training posts. The forest (best mtry = 3, min_n = 10, both at the low edge of the grid) is the most accurate, suggesting interactions between timing, post type and year, and it relies most on body length, post type and title length, with body sarcasm ranking fourth. The no-sarcasm forest reuses the hyperparameters tuned with sarcasm, which may slightly favor the sarcasm model. CV and test results agree for every model, so overfitting is not a concern.
 # 4 Model evaluation
 
 ## Collect results for all models
