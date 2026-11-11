@@ -915,8 +915,11 @@ ggplot(ablation, aes(x = model.family, y = delta_rmse)) +
   theme_light()
 ```
 
-> **[PLACEHOLDER: Sarcasm result]**
-> State whether sarcasm reduces log-scale RMSE beyond the other features, how consistent the reduction is across folds, and what that means for the project's novel idea. The fixed-hyperparameter random forest comparison is conditional on tuning with sarcasm.
+## Results of Sarcasm as a Feature
+
+Adding the title and body sarcasm features reduces our log-scale RMSE beyond the other predictors, though the actual drop in error is pretty small. Across our five cross-validation folds, the paired difference in RMSE is negative in every single fold for all of the model types we tested. The baseline log-linear model barely moves at all, with an average RMSE change of just -0.0009 (ranging from -0.0012 to -0.0007) because the raw linear title_sarcasm term is not statistically significant on its own. Once we add our expanded feature set and put a natural spline on title sarcasm in the expanded log-linear model, the average RMSE reduction grows to -0.0061, and the random forest sees the largest average drop at -0.0102 (ranging from -0.0127 to -0.0086).
+
+One caveat with our random forest ablation is that we held the hyperparameters (mtry = 3 and min_n = 10) fixed to the values we tuned while the sarcasm features were included. Because of that setup, the -0.0102 improvement is conditional on that specific tuning configuration rather than a separately tuned forest without sarcasm. Even with that limitation in mind, the progression from the simple baseline to the tree model tells us something useful about our original project hypothesis. Sarcasm is not a magic predictor that drives comment volume by itself, but it does carry a signal when a flexible model can capture its non-linear shape.
 
 ## Secondary comparison: AUC for high vs. low engagement
 
@@ -1023,5 +1026,10 @@ ggplot(subgroup.rmse, aes(x = level, y = .estimate, color = model, group = model
   theme_light()
 ```
 
-> **[PLACEHOLDER: Model performance and errors]**
-> Describe overall performance, where the models perform poorly (e.g., viral posts in the tail, particular post types or years), and compare the simple and complex models. Discuss what the residual and subgroup plots say about systematic error, and next steps (market index data, `tidytext` features, time-based split).
+## Model performance and errors
+
+Across all of the models we fit, cross-validation and test set metrics match up very closely. The reduced-feature baseline log-linear model (blm1) gets a test RMSE of 1.559 and an R-squared of 0.007, which is barely better than just guessing the training mean with the null model (test RMSE of 1.564). Adding the expanded context and title features (lm1 and lasso) drops the test RMSE to 1.473 and raises R-squared to 0.114, while the lasso penalty (0.000113) keeps 50 non-zero terms. The random forest (rf1) performs the best by a wide margin, reaching a test RMSE of 1.303, a test MAE of 1.021, an R-squared of 0.307, and a secondary ROC AUC of 0.674.
+
+Even with our best random forest model, the predicted versus actual scatterplot shows that we struggle to predict extreme outcomes. While actual log_comms ranges from 0 up to 10.59 (nearly 40,000 comments), the random forest pushes its predictions into a much narrower band between roughly 1.5 and 6.5. Because trees average the training responses inside each terminal leaf and we had to exclude post-creation variables like upvote score to avoid data leakage, the model naturally regresses toward the mean. As a result, it systematically underpredicts viral megathreads in the upper tail and slightly overpredicts dead posts that get zero replies.
+
+Looking at the residual boxplots and subgroup RMSE plots across post_type and post_year, we can see how adding features fixes systematic bias. The simple baseline model (blm1) has off-center median residuals across different post formats and years because it does not even know what year or post type a submission belongs to. Both the expanded linear model and the random forest center the median residuals right around zero for every subgroup, and the random forest achieves the lowest test RMSE across every single post type and year. However, all of the models still suffer from large positive outlier residuals, especially on text posts and image posts where sudden viral breakouts seem to happen.
