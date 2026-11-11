@@ -43,23 +43,17 @@ rm(list = ls(all.names = TRUE))
 > **[PLACEHOLDER: Analysis type and project question]**
 > Supervised learning to predict post engagement (`comms_num`) on r/wallstreetbets. Sarcasm score is the novel feature; it is one candidate predictor among several. Describe why supervised learning fits and how the work is framed (what predicts engagement best, and does sarcasm add anything beyond the other features?).
 
-> **[PLACEHOLDER: Outcome definition]**
-> Two views of the same target: (1) binary `high_engagement` (`comms_num` above the dataset median) for the logistic baseline, and (2) continuous `log1p(comms_num)` for the log-linear, lasso, and random forest models. Justify the median threshold and the log transform (heavy-tailed counts, see Checkpoint 2). Explain how the two are compared (ROC AUC on the high/low outcome, using the predicted log count as the score for the regression models).
+All models predict the same continuous response, `log_comms = log1p(comms_num)`. The log transform compresses the heavy right tail while retaining posts with zero comments. The simple baseline is an ordinary linear regression with a few predictors; expanded linear regression, lasso, and random forest use the same response, so their prediction errors are directly comparable. The binary `high_engagement` label (comment count above the dataset median) is retained only for stratification and a secondary ROC AUC analysis of engagement ranking.
 
-> **[PLACEHOLDER: Training approach]**
-> Random seed (`set.seed(42)`), 80/20 train/test split stratified on `high_engagement`, 5-fold stratified cross-validation on the training set, and that all models share the same split and folds. Discuss random vs. time-based split given posts span Jan 2021 to Mar 2025.
+With `set.seed(42)`, allocate 80% of posts to training and 20% to testing, stratified on `high_engagement`. Use the same five stratified cross-validation folds within training for every model. Recipes estimate preprocessing parameters within each analysis fold, and final workflows are refitted on the full training set. The random split evaluates held-out posts from the historical mixture; because posts span Jan 2021 to Mar 2025, a chronological split would be needed to assess prediction of future posts.
 
-> **[PLACEHOLDER: Sarcasm ablation design]**
-> Each model family is fit with and without the sarcasm features on identical folds; the paired fold-level difference in AUC measures the contribution of sarcasm. Include the null model as the reference (AUC = 0.5, RMSE = SD of target).
+Fit the baseline linear regression, expanded linear regression, and random forest with and without sarcasm on identical folds. Compare paired fold-level differences in log-scale RMSE; a negative difference (with minus without sarcasm) indicates improvement. The random forest ablation holds the hyperparameters selected with sarcasm fixed. A null regression predicting the training mean of `log_comms` provides the reference.
 
-> **[PLACEHOLDER: Feature engineering]**
-> Baseline features, expanded features (post type from `url`, NY posting hour, day of week, year, title length / caps ratio / punctuation / ticker / emoji / keyword flags), normalization, dummy coding, spline on title sarcasm (non-linear trend from Checkpoint 2). Explain why `score` is excluded (accrues after posting, leakage). Note features deferred to later (daily index prices, `tidytext` features).
+The baseline uses `log_body_words`, `no_body`, and `market_open`, with an additional version including linear title and body sarcasm terms. Expanded models add post type, NY posting hour, day of week, year, and title length, caps ratio, punctuation, ticker, emoji, and keyword flags. Expanded linear regression and lasso use a spline for title sarcasm. Linear-model recipes normalize numeric predictors and dummy-code factors; the random forest retains factors. `score` is excluded because it accrues after posting. Comparing the reduced baseline with expanded models measures the combined benefit of additional features and model flexibility; expanded linear regression provides a closer reference for lasso and random forest using the same predictor information.
 
-> **[PLACEHOLDER: Hyperparameters and optimization]**
-> Logistic and log-linear: none. Lasso: `penalty` (log-spaced grid, `mixture = 1`). Random forest: `mtry` and `min_n` (regular grid, fixed `trees`). All tuned with `tune_grid()` over the shared CV folds using RMSE; final model refit on the full training set.
+Unpenalized linear regressions have no tuned hyperparameters. Tune lasso's `penalty` on a log-spaced grid with `mixture = 1`, and random forest's `mtry` and `min_n` on a regular grid with a fixed number of trees. Use `tune_grid()` over the shared training folds and select the lowest RMSE before refitting on the full training set.
 
-> **[PLACEHOLDER: Evaluation metrics and reproducibility notes]**
-> Metrics: ROC AUC (common to all models), plus accuracy / precision / recall / F1 (logistic) and RMSE / MAE / R-squared on the log scale (regression models). Package versions, data file used, and run time notes.
+The primary comparison uses RMSE on `log_comms`, with MAE and R-squared as supporting metrics, for every model. Secondary ROC AUC uses each model's predicted log count to rank the same high/low engagement outcome; it does not measure count accuracy. Cross-validation results for selected tuning parameters may be optimistic, so the held-out test results provide the final performance assessment. Package versions are recorded in `renv.lock`.
 
 # 2 Baseline model fit
 
@@ -123,7 +117,7 @@ data = data_wsb2022_sarcasm |>
     link_only = {
       body_text = stringr::str_trim(dplyr::coalesce(body, ""))
       (stringr::str_detect(body_text, "(?i)^https?://\\S+$") |
-        stringr::str_detect(body_text, "(?i)^\\[[^\\]]+\\]\\(https?://\\S+\\)$")) &
+         stringr::str_detect(body_text, "(?i)^\\[[^\\]]+\\]\\(https?://\\S+\\)$")) &
         !stringr::str_detect(
           body_text,
           "(?i)https?://(?:[a-z0-9-]+\\.)*(?:reddit\\.com|redd\\.it)(?=[:/?#]|$)"
@@ -251,7 +245,9 @@ model.df = data_verified %>%
     title_caps_ratio = stringr::str_count(title, "[A-Z]") / pmax(stringr::str_count(title, "[A-Za-z]"), 1),
     title_has_question = yn(stringr::str_detect(title, "\\?")),
     title_has_exclaim = yn(stringr::str_detect(title, "!")),
-    title_ticker = normalize.ticker(stringr::str_remove(stringr::str_extract(title, ticker.pattern), stringr::fixed("$"))),
+    title_ticker = normalize.ticker(
+      stringr::str_remove(stringr::str_extract(title, ticker.pattern), stringr::fixed("$"))
+    ),
     title_has_ticker = yn(!is.na(title_ticker)),
     title_ticker_popular = yn(if_else(is.na(title_ticker), NA, title_ticker %in% popular.tickers)),
     title_has_emoji = yn(stringr::str_detect(title, "\\p{So}")),
@@ -348,14 +344,14 @@ exp.vars = c("log_body_words", "no_body", title.vars, ctx.vars)
 
 # model names (used to label results)
 m.null = "Null (mean)"
-m.lr0 = "Logistic: no sarcasm"
-m.lr1 = "Logistic: + sarcasm"
-m.lm0 = "Log-linear: no sarcasm"
-m.lm1 = "Log-linear: + sarcasm"
+m.blm0 = "Baseline log-linear: no sarcasm"
+m.blm1 = "Baseline log-linear: + sarcasm"
+m.lm0 = "Expanded log-linear: no sarcasm"
+m.lm1 = "Expanded log-linear: + sarcasm"
 m.lasso = "Lasso: + sarcasm"
 m.rf0 = "Random forest: no sarcasm"
 m.rf1 = "Random forest: + sarcasm"
-model.levels = c(m.null, m.lr0, m.lr1, m.lm0, m.lm1, m.lasso, m.rf0, m.rf1)
+model.levels = c(m.null, m.blm0, m.blm1, m.lm0, m.lm1, m.lasso, m.rf0, m.rf1)
 ```
 
 ```{r}
@@ -379,7 +375,6 @@ make.recipe = function(outcome, predictors, ns.sarcasm = FALSE, linear.prep = TR
 }
 
 # metrics
-class.metrics = metric_set(accuracy, roc_auc, precision, recall, f_meas)
 reg.metrics = metric_set(rmse, mae, rsq)
 
 # cross validation wrapper (same folds for every model)
@@ -395,11 +390,14 @@ fit.cv = function(wf, metrics, parallel = FALSE) {
   )
 }
 
-# per-fold AUC for the high/low outcome
-cv.auc.class = function(res, name) {
-  collect_predictions(res) %>%
-    group_by(id) %>%
-    roc_auc(truth = high_engagement, .pred_high) %>%
+# per-fold regression metrics, optionally restricted to selected tuning parameters
+collect.cv.metrics = function(res, name, params = NULL) {
+  metrics = collect_metrics(res, summarize = FALSE)
+  if (!is.null(params)) {
+    metrics = metrics %>% semi_join(params, by = ".config")
+  }
+  metrics %>%
+    select(id, .metric, .estimate) %>%
     mutate(model = name)
 }
 
@@ -413,16 +411,15 @@ cv.auc.reg = function(res, name, params = NULL) {
 }
 
 # test set predictions in a common format
-collect.test = function(fit, name, type) {
+collect.test = function(fit, name) {
   augment(fit, wsb.test) %>%
     mutate(
       model = name,
-      score = if (type == "class") .pred_high else .pred,
-      pred_log = if (type == "reg") .pred else NA_real_
+      pred_log = .pred
     ) %>%
     select(
       model, post_id, comms_num, log_comms, high_engagement, post_type,
-      post_year, ny_dow, title_sarcasm, score, pred_log
+      post_year, ny_dow, title_sarcasm, pred_log
     )
 }
 
@@ -447,33 +444,34 @@ null.cv %>%
   collect_metrics()
 ```
 
-## Logistic regression: baseline with and without sarcasm
+## Linear regression on log1p(comments): reduced-feature baseline
+
+Use three predictors: log body word count, whether the body is missing, and whether the post was made during market hours. The second version adds title and body sarcasm as linear terms. Both predict the same log comment count as the expanded models; no spline or interaction is used in this baseline.
 
 ```{r}
-lr.mod = logistic_reg() %>%
-  set_engine("glm") %>%
-  set_mode("classification")
+lm.mod = linear_reg() %>%
+  set_engine("lm")
 
-lr0.wf = workflow() %>%
-  add_model(lr.mod) %>%
-  add_recipe(make.recipe("high_engagement", base.vars))
+blm0.wf = workflow() %>%
+  add_model(lm.mod) %>%
+  add_recipe(make.recipe("log_comms", base.vars))
 
-lr1.wf = workflow() %>%
-  add_model(lr.mod) %>%
-  add_recipe(make.recipe("high_engagement", c(base.vars, sarc.vars)))
+blm1.wf = workflow() %>%
+  add_model(lm.mod) %>%
+  add_recipe(make.recipe("log_comms", c(base.vars, sarc.vars)))
 
-lr1.wf
+blm1.wf
 ```
 
 ### Cross-validated performance
 
 ```{r}
-lr0.cv = fit.cv(lr0.wf, class.metrics)
-lr1.cv = fit.cv(lr1.wf, class.metrics)
+blm0.cv = fit.cv(blm0.wf, reg.metrics)
+blm1.cv = fit.cv(blm1.wf, reg.metrics)
 
 bind_rows(
-  collect_metrics(lr0.cv) %>% mutate(model = m.lr0),
-  collect_metrics(lr1.cv) %>% mutate(model = m.lr1)
+  collect_metrics(blm0.cv) %>% mutate(model = m.blm0),
+  collect_metrics(blm1.cv) %>% mutate(model = m.blm1)
 ) %>%
   select(model, .metric, mean, std_err) %>%
   arrange(.metric, model)
@@ -482,39 +480,47 @@ bind_rows(
 ### Final fit and test set performance
 
 ```{r}
-lr0.final = fit(lr0.wf, wsb.train)
-lr1.final = fit(lr1.wf, wsb.train)
+blm0.final = fit(blm0.wf, wsb.train)
+blm1.final = fit(blm1.wf, wsb.train)
 
-lr1.test.pred = augment(lr1.final, wsb.test)
+baseline.test.pred = bind_rows(
+  collect.test(blm0.final, m.blm0),
+  collect.test(blm1.final, m.blm1)
+)
 
-lr1.test.pred %>%
-  class.metrics(truth = high_engagement, estimate = .pred_class, .pred_high)
+baseline.test.pred %>%
+  group_by(model) %>%
+  reg.metrics(truth = log_comms, estimate = pred_log)
 ```
 
 ```{r}
-lr1.test.pred %>%
-  conf_mat(truth = high_engagement, estimate = .pred_class) %>%
-  autoplot(type = "heatmap")
+baseline.test.pred %>%
+  filter(model == m.blm1) %>%
+  ggplot(aes(x = pred_log, y = log_comms)) +
+  geom_point(alpha = 0.05, color = "#1a237e") +
+  geom_abline(color = "#d32f2f") +
+  labs(x = "Predicted log(1 + comms_num)", y = "Actual log(1 + comms_num)") +
+  theme_light()
 ```
 
 ### Coefficients
 
-Odds ratios per one standard deviation change (numeric predictors are normalized) or for the "yes" level (dummy predictors).
+Coefficients describe changes in predicted `log(1 + comms_num)` per one standard deviation increase in a numeric predictor, or for the "yes" versus "no" level of a dummy predictor, holding other predictors fixed. These are log-scale coefficients, not odds ratios.
 
 ```{r}
-lr1.coefs = lr1.final %>%
+blm1.coefs = blm1.final %>%
   extract_fit_parsnip() %>%
-  tidy(exponentiate = TRUE, conf.int = TRUE)
+  tidy(conf.int = TRUE)
 
-lr1.coefs
+blm1.coefs
 
-lr1.coefs %>%
+blm1.coefs %>%
   filter(term != "(Intercept)") %>%
   ggplot(aes(x = estimate, y = reorder(term, estimate))) +
   geom_point() +
   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
-  geom_vline(xintercept = 1, linetype = "dashed") +
-  labs(x = "Odds ratio (95% CI)", y = NULL) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(x = "Coefficient on log comment count (95% CI)", y = NULL) +
   theme_light()
 ```
 
@@ -528,9 +534,6 @@ lr1.coefs %>%
 Same expanded feature set with and without sarcasm. With sarcasm, title sarcasm enters as a spline to capture the non-linear trend.
 
 ```{r}
-lm.mod = linear_reg() %>%
-  set_engine("lm")
-
 lm0.wf = workflow() %>%
   add_model(lm.mod) %>%
   add_recipe(make.recipe("log_comms", exp.vars))
@@ -722,11 +725,116 @@ ggplot(rf1.importance, aes(x = importance, y = reorder(feature, importance))) +
 ## Collect results for all models
 
 ```{r}
-# per-fold CV AUC (same folds for every model)
+# per-fold regression metrics (same folds and response for every model)
+cv.reg.fold = bind_rows(
+  collect.cv.metrics(null.cv, m.null),
+  collect.cv.metrics(blm0.cv, m.blm0),
+  collect.cv.metrics(blm1.cv, m.blm1),
+  collect.cv.metrics(lm0.cv, m.lm0),
+  collect.cv.metrics(lm1.cv, m.lm1),
+  collect.cv.metrics(lasso.tune.res, m.lasso, params = lasso.best),
+  collect.cv.metrics(rf0.cv, m.rf0),
+  collect.cv.metrics(rf.tune.res, m.rf1, params = rf.best)
+)
+
+cv.reg = cv.reg.fold %>%
+  group_by(model, .metric) %>%
+  summarise(cv_mean = mean(.estimate), cv_sd = sd(.estimate), .groups = "drop")
+
+# test set predictions (same held-out test set for every model)
+test.pred.all = bind_rows(
+  collect.test(null.final, m.null),
+  baseline.test.pred,
+  collect.test(lm0.final, m.lm0),
+  collect.test(lm1.final, m.lm1),
+  collect.test(lasso.final, m.lasso),
+  collect.test(rf0.final, m.rf0),
+  collect.test(rf1.final, m.rf1)
+)
+
+test.reg = test.pred.all %>%
+  group_by(model) %>%
+  reg.metrics(truth = log_comms, estimate = pred_log) %>%
+  select(model, .metric, test = .estimate)
+```
+
+## Primary comparison: regression metrics (log scale)
+
+All models are evaluated against the same `log_comms` response. Lower RMSE and MAE indicate more accurate log-count predictions. The reduced and expanded linear models distinguish the benefit of the expanded specification from the additional effects of regularization or a random forest.
+
+```{r}
+cv.reg %>%
+  select(-cv_sd) %>%
+  left_join(test.reg, by = c("model", ".metric")) %>%
+  mutate(model = factor(model, levels = model.levels)) %>%
+  pivot_wider(names_from = .metric, values_from = c(cv_mean, test)) %>%
+  arrange(model) %>%
+  kable(digits = 3, caption = "Regression Metrics on log1p(comms_num): All Models")
+```
+
+```{r}
+rmse.summary = cv.reg %>%
+  filter(.metric == "rmse") %>%
+  left_join(test.reg, by = c("model", ".metric")) %>%
+  mutate(model = factor(model, levels = model.levels))
+
+ggplot(rmse.summary, aes(y = fct_rev(model))) +
+  geom_pointrange(aes(x = cv_mean, xmin = cv_mean - cv_sd, xmax = cv_mean + cv_sd)) +
+  geom_point(aes(x = test), shape = 4, size = 3, color = "#d32f2f") +
+  labs(
+    x = "RMSE on log(1 + comms_num) (lower is better)", y = NULL,
+    caption = "Black = CV mean +/- 1 SD, red X = test set"
+  ) +
+  theme_light()
+```
+
+## Does sarcasm help? (paired fold differences in RMSE)
+
+```{r}
+cv.rmse.wide = cv.reg.fold %>%
+  filter(.metric == "rmse") %>%
+  select(id, model, .estimate) %>%
+  pivot_wider(names_from = model, values_from = .estimate)
+
+ablation = cv.rmse.wide %>%
+  transmute(
+    id,
+    `Baseline log-linear` = .data[[m.blm1]] - .data[[m.blm0]],
+    `Expanded log-linear` = .data[[m.lm1]] - .data[[m.lm0]],
+    `Random forest` = .data[[m.rf1]] - .data[[m.rf0]]
+  ) %>%
+  pivot_longer(-id, names_to = "model.family", values_to = "delta_rmse")
+
+ablation %>%
+  group_by(model.family) %>%
+  summarise(
+    mean_delta = mean(delta_rmse), sd_delta = sd(delta_rmse),
+    min_delta = min(delta_rmse), max_delta = max(delta_rmse)
+  ) %>%
+  kable(
+    digits = 4,
+    caption = "Change in CV RMSE from adding sarcasm features (negative = improvement)"
+  )
+
+ggplot(ablation, aes(x = model.family, y = delta_rmse)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 2) +
+  labs(x = NULL, y = "RMSE with sarcasm minus RMSE without (negative = improvement)") +
+  theme_light()
+```
+
+> **[PLACEHOLDER: Sarcasm result]**
+> State whether sarcasm reduces log-scale RMSE beyond the other features, how consistent the reduction is across folds, and what that means for the project's novel idea. The fixed-hyperparameter random forest comparison is conditional on tuning with sarcasm.
+
+## Secondary comparison: AUC for high vs. low engagement
+
+Predicted log counts are used only as ranking scores here. This analysis measures discrimination of the binary engagement label and supplements the primary regression comparison.
+
+```{r}
 cv.auc = bind_rows(
   cv.auc.reg(null.cv, m.null),
-  cv.auc.class(lr0.cv, m.lr0),
-  cv.auc.class(lr1.cv, m.lr1),
+  cv.auc.reg(blm0.cv, m.blm0),
+  cv.auc.reg(blm1.cv, m.blm1),
   cv.auc.reg(lm0.cv, m.lm0),
   cv.auc.reg(lm1.cv, m.lm1),
   cv.auc.reg(lasso.tune.res, m.lasso, params = lasso.best),
@@ -734,107 +842,25 @@ cv.auc = bind_rows(
   cv.auc.reg(rf.tune.res, m.rf1, params = rf.best)
 )
 
-# test set predictions (same held-out test set for every model)
-test.pred.all = bind_rows(
-  collect.test(null.final, m.null, "reg"),
-  collect.test(lr0.final, m.lr0, "class"),
-  collect.test(lr1.final, m.lr1, "class"),
-  collect.test(lm0.final, m.lm0, "reg"),
-  collect.test(lm1.final, m.lm1, "reg"),
-  collect.test(lasso.final, m.lasso, "reg"),
-  collect.test(rf0.final, m.rf0, "reg"),
-  collect.test(rf1.final, m.rf1, "reg")
-)
-
 test.auc = test.pred.all %>%
   group_by(model) %>%
-  roc_auc(truth = high_engagement, score)
-```
+  roc_auc(truth = high_engagement, pred_log) %>%
+  select(model, test_auc = .estimate)
 
-## AUC comparison (all models)
-
-```{r}
 auc.summary = cv.auc %>%
   group_by(model) %>%
-  summarise(cv_auc_mean = mean(.estimate), cv_auc_sd = sd(.estimate), .groups = "drop") %>%
-  left_join(test.auc %>% select(model, test_auc = .estimate), by = "model") %>%
+  summarise(
+    cv_auc_mean = mean(.estimate), cv_auc_sd = sd(.estimate), .groups = "drop"
+  ) %>%
+  left_join(test.auc, by = "model") %>%
   mutate(model = factor(model, levels = model.levels)) %>%
   arrange(model)
 
 auc.summary %>%
   kable(
     digits = 3, col.names = c("Model", "CV AUC (mean)", "CV AUC (SD)", "Test AUC"),
-    caption = "ROC AUC for High vs. Low Engagement"
+    caption = "Secondary ROC AUC for High vs. Low Engagement"
   )
-```
-
-```{r}
-ggplot(auc.summary, aes(y = fct_rev(model))) +
-  geom_pointrange(aes(x = cv_auc_mean, xmin = cv_auc_mean - cv_auc_sd, xmax = cv_auc_mean + cv_auc_sd)) +
-  geom_point(aes(x = test_auc), shape = 4, size = 3, color = "#d32f2f") +
-  labs(x = "ROC AUC", y = NULL, caption = "Black = CV mean +/- 1 SD, red X = test set") +
-  theme_light()
-```
-
-## Does sarcasm help? (paired fold differences in AUC)
-
-```{r}
-cv.auc.wide = cv.auc %>%
-  select(id, model, .estimate) %>%
-  pivot_wider(names_from = model, values_from = .estimate)
-
-ablation = cv.auc.wide %>%
-  transmute(
-    id,
-    `Logistic` = .data[[m.lr1]] - .data[[m.lr0]],
-    `Log-linear` = .data[[m.lm1]] - .data[[m.lm0]],
-    `Random forest` = .data[[m.rf1]] - .data[[m.rf0]]
-  ) %>%
-  pivot_longer(-id, names_to = "model.family", values_to = "delta_auc")
-
-ablation %>%
-  group_by(model.family) %>%
-  summarise(
-    mean_delta = mean(delta_auc), sd_delta = sd(delta_auc),
-    min_delta = min(delta_auc), max_delta = max(delta_auc)
-  ) %>%
-  kable(digits = 4, caption = "Change in CV AUC from adding sarcasm features")
-
-ggplot(ablation, aes(x = model.family, y = delta_auc)) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  geom_point(size = 2) +
-  labs(x = NULL, y = "AUC with sarcasm minus AUC without") +
-  theme_light()
-```
-
-> **[PLACEHOLDER: Sarcasm result]**
-> State whether sarcasm adds predictive value beyond the other features, how consistent the gain (or lack of one) is across folds, and what that means for the project's novel idea.
-
-## Regression metrics (log scale)
-
-```{r}
-cv.reg = bind_rows(
-  collect_metrics(null.cv) %>% mutate(model = m.null),
-  collect_metrics(lm0.cv) %>% mutate(model = m.lm0),
-  collect_metrics(lm1.cv) %>% mutate(model = m.lm1),
-  collect_metrics(lasso.tune.res) %>% semi_join(lasso.best, by = ".config") %>% mutate(model = m.lasso),
-  collect_metrics(rf0.cv) %>% mutate(model = m.rf0),
-  collect_metrics(rf.tune.res) %>% semi_join(rf.best, by = ".config") %>% mutate(model = m.rf1)
-) %>%
-  select(model, .metric, cv_mean = mean)
-
-test.reg = test.pred.all %>%
-  filter(!is.na(pred_log)) %>%
-  group_by(model) %>%
-  reg.metrics(truth = log_comms, estimate = pred_log) %>%
-  select(model, .metric, test = .estimate)
-
-cv.reg %>%
-  left_join(test.reg, by = c("model", ".metric")) %>%
-  mutate(model = factor(model, levels = model.levels)) %>%
-  pivot_wider(names_from = .metric, values_from = c(cv_mean, test)) %>%
-  arrange(model) %>%
-  kable(digits = 3, caption = "Regression Metrics on log1p(comms_num)")
 ```
 
 ## ROC curves on the test set
@@ -843,7 +869,7 @@ cv.reg %>%
 test.pred.all %>%
   mutate(model = factor(model, levels = model.levels)) %>%
   group_by(model) %>%
-  roc_curve(truth = high_engagement, score) %>%
+  roc_curve(truth = high_engagement, pred_log) %>%
   ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
   geom_path() +
   geom_abline(linetype = "dashed") +
@@ -868,7 +894,7 @@ test.pred.all %>%
 ```{r}
 # residuals by post type and by year: systematic errors
 resid.df = test.pred.all %>%
-  filter(model %in% c(m.lm1, m.rf1)) %>%
+  filter(model %in% c(m.blm1, m.lm1, m.rf1)) %>%
   mutate(resid = log_comms - pred_log)
 
 p_type = ggplot(resid.df, aes(x = post_type, y = resid, fill = model)) +
@@ -885,23 +911,23 @@ p_type / p_year
 ```
 
 ```{r}
-# AUC by subgroup (test set): baseline logistic vs. random forest
-subgroup.auc = bind_rows(
+# RMSE by subgroup (test set): reduced baseline vs. expanded linear vs. random forest
+subgroup.rmse = bind_rows(
   test.pred.all %>%
-    filter(model %in% c(m.lr1, m.rf1)) %>%
+    filter(model %in% c(m.blm1, m.lm1, m.rf1)) %>%
     group_by(model, group = "post_type", level = as.character(post_type)) %>%
-    roc_auc(truth = high_engagement, score),
+    rmse(truth = log_comms, estimate = pred_log),
   test.pred.all %>%
-    filter(model %in% c(m.lr1, m.rf1)) %>%
+    filter(model %in% c(m.blm1, m.lm1, m.rf1)) %>%
     group_by(model, group = "post_year", level = as.character(post_year)) %>%
-    roc_auc(truth = high_engagement, score)
+    rmse(truth = log_comms, estimate = pred_log)
 )
 
-ggplot(subgroup.auc, aes(x = level, y = .estimate, color = model, group = model)) +
+ggplot(subgroup.rmse, aes(x = level, y = .estimate, color = model, group = model)) +
   geom_point() +
   geom_line() +
   facet_wrap(. ~ group, scales = "free_x") +
-  labs(x = NULL, y = "Test AUC") +
+  labs(x = NULL, y = "Test RMSE on log(1 + comms_num)") +
   theme_light()
 ```
 
