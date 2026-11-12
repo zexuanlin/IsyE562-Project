@@ -25,9 +25,7 @@ library(knitr)
 library(data.table)
 library(lubridate) # date-time package
 library(skimr)
-library(ggpubr)
 library(patchwork)
-library(GGally)
 library(assertr)
 library(ranger)
 library(tidymodels)
@@ -38,7 +36,7 @@ set.seed(42)
 rm(list = ls(all.names = TRUE))
 ```
 
-# 1 Analysis approach
+# Analysis approach
 
 Our project uses **supervised ML** to predict engagement of reddit posts on
 subreddit `r/wallstreetbets`. We also extend the original dataset with some
@@ -67,8 +65,9 @@ We have the following models being tested and compared in our project:
     - `log_body_words`: Log transformed word count for post body
     - `no_body`: Whether the post have post body at all (due to post being
     link-only, image only...)
-    - `market_open`: Whether the post was posted at a time when NYSE was during
-      regular opening hours 
+    - `market_open`: A coarse time-of-day flag for posts created from 09:00
+      through 15:59 in New York; it does not check weekdays, holidays, or the
+      09:30 exchange opening time
 - Advanced model 1 (linear, extended features):
   - Model type: Multiple linear regression, fitted through tidymodels with the
     `lm` engine. This model extends the baseline with more information about
@@ -135,6 +134,13 @@ We have the following models being tested and compared in our project:
     combination with the lowest mean log-scale RMSE across the same five
     training cross-validation folds.
 
+We considered linking posts to daily stock-price movements using tickers in
+their titles. We did not include this extension in the models because ticker
+extraction and price matching cover only a subset of posts. Restricting the
+analysis to that subset would change the population addressed by our research
+question. Section 3.1 demonstrates the attempted extension and its coverage
+limitations; the simpler `title_has_ticker` flag remains an expanded predictor.
+
 The primary comparison uses RMSE on `log_comms`, with MAE and R-squared as supporting metrics, for every model. 
 Secondary ROC AUC uses each model's predicted log count to rank the same high/low engagement outcome; 
 it does not measure count accuracy. Cross-validation results for selected tuning parameters may be optimistic, 
@@ -179,39 +185,18 @@ data_wsb2022_sarcasm |>
 ```
 
 ```{r}
-# Derivate meaningful variables (same as Checkpoint 2)
+# Derive the body features needed by the models.
 data = data_wsb2022_sarcasm |>
-  # created time in NY timezone (wallstreet)
   dplyr::mutate(
-    created_ny_time = format(
-      lubridate::with_tz(lubridate::as_datetime(created, tz = "UTC"), tzone = "America/New_York"),
-      "%H:%M:%S"
-    ),
-    created_ny_hour_bin = {
-      ny_hour = as.integer(substr(created_ny_time, 1L, 2L))
-      hour_label = dplyr::if_else(
-        is.na(ny_hour), NA_character_, paste0(ny_hour, "-", (ny_hour + 1L) %% 24L)
-      )
-      factor(hour_label, levels = paste0(0:23, "-", (1:24) %% 24), ordered = TRUE)
-    },
     # posts without body
     no_body = is.na(body) | trimws(body) == "",
     # post content word count
-    body_work_count = stringr::str_count(dplyr::coalesce(body, ""), "\\S+"),
-    # posts with only a link
-    link_only = {
-      body_text = stringr::str_trim(dplyr::coalesce(body, ""))
-      (stringr::str_detect(body_text, "(?i)^https?://\\S+$") |
-        stringr::str_detect(body_text, "(?i)^\\[[^\\]]+\\]\\(https?://\\S+\\)$")) &
-        !stringr::str_detect(
-          body_text,
-          "(?i)https?://(?:[a-z0-9-]+\\.)*(?:reddit\\.com|redd\\.it)(?=[:/?#]|$)"
-        )
-    }
+    body_word_count = stringr::str_count(dplyr::coalesce(body, ""), "\\S+")
   )
 ```
 
-Apply the same cleaning and quality assertions as Checkpoint 2.
+Apply the same cleaning and quality assertions as Checkpoint 2. Only body
+presence and word count are derived here; posting-time features are built below.
 
 ```{r}
 # 1. Clean missing IDs and target values
@@ -241,9 +226,11 @@ dim_summary |> kable(caption = "Dataset Dimensions Before and After Cleaning")
 
 Here we have added new metrics. We made the metric of high_engagement which is when a post has more than the median number of comments, which is 26. It is used as a helper label and not the target
 
-We also created the outcomes and all candidate features. The predictor sets below use information available at posting time. `score` is excluded because it accrues after the post is created. The distinction of post type we have made based on the URL. 
-
-x 
+We create the outcomes and the predictors used by the baseline and expanded
+models, using information available at posting time. `score` is excluded because
+it accrues after the post is created. Post type is inferred from the URL.
+Ticker identities, popularity, daily stock movements, and separate gain/loss
+labels are explored only in the demonstration in Section 3.1.
 
 ```{r}
 # threshold for "high" engagement (median comment count)
@@ -257,54 +244,13 @@ yn = function(x) factor(if_else(x, "yes", "no"), levels = c("no", "yes"))
 
 # nolint end
 
-# Ticker references and daily prices. The price CSV has two header rows
-# (price field, then ticker), followed by a Date row before the observations.
+# The expanded models use cashtag presence, not a stock identity or price join.
 ticker.pattern = "\\$\\^?[A-Za-z]{1,5}(?:[.-][A-Za-z])?\\b"
-normalize.ticker = function(x) stringr::str_replace_all(stringr::str_to_upper(x), stringr::fixed("."), "-")
-
-popular.tickers = read_csv("./reference/popular_tickers.csv", show_col_types = FALSE) %>%
-  pull(symbol) %>%
-  stringr::str_trim() %>%
-  normalize.ticker()
-
-price.header = data.table::fread(
-  "./data/SnP_daily_update.csv",
-  header = FALSE, nrows = 2, colClasses = "character", showProgress = FALSE
-)
-close.columns = which(as.character(price.header[1, ]) == "Close")
-close.tickers = normalize.ticker(as.character(price.header[2, close.columns, with = FALSE]))
-
-daily.close = data.table::fread(
-  "./data/SnP_daily_update.csv",
-  skip = 3, header = FALSE, select = c(1L, close.columns),
-  col.names = c("post_date", close.tickers), showProgress = FALSE
-)
-
-daily.moves = as_tibble(daily.close) %>%
-  mutate(post_date = as.Date(post_date)) %>%
-  pivot_longer(-post_date, names_to = "title_ticker", values_to = "close") %>%
-  group_by(title_ticker) %>%
-  arrange(post_date, .by_group = TRUE) %>%
-  mutate(
-    previous_close = lag(close),
-    ticker_daily_direction = factor(
-      case_when(
-        is.na(close) | is.na(previous_close) ~ NA_character_,
-        close > previous_close ~ "UP",
-        close < previous_close ~ "DOWN",
-        TRUE ~ "FLAT"
-      ),
-      levels = c("DOWN", "FLAT", "UP")
-    )
-  ) %>%
-  ungroup() %>%
-  select(post_date, title_ticker, ticker_daily_direction)
 
 model.df = data_verified %>%
   mutate(
     # posting time in New York
     ny_dt = lubridate::with_tz(lubridate::as_datetime(created, tz = "UTC"), tzone = "America/New_York"),
-    post_date = as.Date(ny_dt, tz = "America/New_York"),
     ny_hour = lubridate::hour(ny_dt),
     market_open = yn(ny_hour >= 9 & ny_hour < 16),
     ny_hour_f = factor(ny_hour, levels = 0:23),
@@ -326,25 +272,15 @@ model.df = data_verified %>%
     ),
     # body features
     no_body = yn(no_body),
-    log_body_words = log1p(body_work_count),
+    log_body_words = log1p(body_word_count),
     # title features
     log_title_chars = log1p(stringr::str_length(title)),
     title_caps_ratio = stringr::str_count(title, "[A-Z]") / pmax(stringr::str_count(title, "[A-Za-z]"), 1),
     title_has_question = yn(stringr::str_detect(title, "\\?")),
     title_has_exclaim = yn(stringr::str_detect(title, "!")),
-    title_ticker = normalize.ticker(
-      stringr::str_remove(stringr::str_extract(title, ticker.pattern), stringr::fixed("$"))
-    ),
-    title_has_ticker = yn(!is.na(title_ticker)),
-    title_ticker_popular = yn(if_else(is.na(title_ticker), NA, title_ticker %in% popular.tickers)),
+    title_has_ticker = yn(!is.na(stringr::str_extract(title, ticker.pattern))),
     title_has_emoji = yn(stringr::str_detect(title, "\\p{So}")),
-    # Independent flags preserve titles that mention both gains and losses.
-    title_has_gain = yn(stringr::str_detect(title, "(?i)\\bgains?\\b")),
-    title_has_loss = yn(stringr::str_detect(title, "(?i)\\bloss(?:es)?\\b")),
-    title_has_kw = yn(
-      stringr::str_detect(title, "(?i)\\b(yolo|dd)\\b") |
-        title_has_gain == "yes" | title_has_loss == "yes"
-    ),
+    title_has_kw = yn(stringr::str_detect(title, "(?i)\\b(yolo|dd|gains?|loss(?:es)?)\\b")),
     # outcomes
     log_comms = log1p(comms_num),
     # first factor level is treated as the "event" by yardstick
@@ -352,15 +288,13 @@ model.df = data_verified %>%
       levels = c("high", "low")
     )
   ) %>%
-  left_join(daily.moves, by = c("post_date", "title_ticker"), relationship = "many-to-one") %>%
   select(
     post_id = id, comms_num, log_comms, high_engagement,
     title_sarcasm, body_sarcasm,
     log_body_words, no_body, market_open,
     log_title_chars, title_caps_ratio, title_has_question, title_has_exclaim,
-    title_has_ticker, title_ticker, title_ticker_popular, ticker_daily_direction,
-    title_has_emoji, title_has_kw, title_has_gain, title_has_loss,
-    post_type, post_date, ny_dow, ny_hour_f, post_year
+    title_has_ticker, title_has_emoji, title_has_kw,
+    post_type, ny_dow, ny_hour_f, post_year
   )
 
 head(model.df)
@@ -416,6 +350,7 @@ parallel.workers
 ```
 
 ## Predictor sets, recipes, and helper functions
+
 Predictors are grouped into a reduced baseline set, a sarcasm set, and an expanded set. A common recipe normalizes numeric predictors and dummy-codes factors for the linear models (the random forest keeps factors as is), and every model is cross-validated on the same folds and scored with RMSE, MAE and R².
 
 
@@ -516,6 +451,7 @@ collect.test = function(fit, name) {
 ```
 
 ## Null model (reference)
+
 >the null model or the dummy model predicts the mean. It gives AUC 0.5 and RMSE of about 1.57, the SD of log-comments, and it’s the reference that everything else must beat. 
 
 ```{r}
@@ -554,6 +490,7 @@ blm1.wf
 ```
 
 ### Cross-validated performance
+
 Under 5-fold CV the baseline is barely better than the null model: RMSE is 1.566 without sarcasm and 1.565 with it (null: 1.571), and R² is under 1%. MAE (about 1.20) is no better than the null’s 1.199.
 ```{r}
 blm0.cv = fit.cv(blm0.wf, reg.metrics)
@@ -616,12 +553,303 @@ blm1.coefs %>%
 ```
 
 ## Baseline model discussion:
+
 The baseline explains under 1% of the variance and is essentially at the null level; adding sarcasm lowers RMSE by less than 0.001. It uses few predictors, treats sarcasm as linear, and omits timing and post-type information, which motivates the expanded models. 
 
 
-# 3 Advanced model fit
+# Advanced model fit
+
 The advanced models predict the same log(1 + comments) target with an expanded predictor set (post type, NY posting hour, day of week, year and title features), with and without sarcasm where applicable.
+
+## Proposed feature extension with new dataset and missing data
+
+In Checkpoint 2, we proposed linking posts to the daily price movement of a
+stock mentioned in the title. The following demonstration attempts that join
+using the local price file, while retaining every cleaned post so that failed
+matches remain visible. `extension.demo` is separate from `model.df` and is not
+used to train or tune any model.
+
+### Reference tickers and matching rules
+
+The project reference file lists the following candidate tickers, grouped by
+its recorded categories. This is a predefined watchlist, not a frequency ranking
+estimated from these posts; its ETF and index entries are also included.
+
+```{r extension-reference-tickers}
+normalize.ticker = function(x) {
+  stringr::str_replace_all(stringr::str_to_upper(stringr::str_trim(x)), stringr::fixed("."), "-")
+}
+
+popular.tickers = read_csv("./reference/popular_tickers.csv", show_col_types = FALSE) %>%
+  mutate(symbol = normalize.ticker(symbol))
+
+popular.tickers %>%
+  group_by(category) %>%
+  summarise(Tickers = paste(symbol, collapse = ", "), Count = n(), .groups = "drop") %>%
+  rename(Category = category) %>%
+  kable(caption = "Candidate Tickers in reference/popular_tickers.csv")
+```
+
+We extract the **first explicit cashtag** in each title (for example, `$GME`),
+uppercase it, and normalize dots to hyphens to match the price-file convention.
+This conservative rule misses bare symbols such as `GME`, company names, and
+mentions appearing only in the body; a title mentioning several stocks is
+represented by its first cashtag. A regex match is a candidate symbol, not proof
+that it names a real security. Coverage below therefore describes this matching
+procedure rather than all stock-related discussion on the subreddit. Separately,
+we identify the words gain/gains and loss/losses in titles. These are lexical
+mentions, not verified investment returns; titles mentioning both retain a
+distinct label.
+
+```{r extension-demo-posts}
+extension.demo = data_verified %>%
+  transmute(
+    post_id = id,
+    title = coalesce(title, ""),
+    post_date = as.Date(
+      lubridate::with_tz(lubridate::as_datetime(created, tz = "UTC"), "America/New_York"),
+      tz = "America/New_York"
+    ),
+    title_ticker = normalize.ticker(
+      stringr::str_remove(stringr::str_extract(title, ticker.pattern), stringr::fixed("$"))
+    ),
+    title_ticker_popular = if_else(
+      is.na(title_ticker), NA, title_ticker %in% popular.tickers$symbol
+    ),
+    has_gain = stringr::str_detect(title, "(?i)\\bgains?\\b"),
+    has_loss = stringr::str_detect(title, "(?i)\\bloss(?:es)?\\b"),
+    gain_loss = case_when(
+      has_gain & has_loss ~ "Both",
+      has_gain ~ "Gain only",
+      has_loss ~ "Loss only",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  left_join(
+    model.df %>% select(post_id, post_type, post_year),
+    by = "post_id", relationship = "one-to-one"
+  )
+
+# Two header rows identify the price field and ticker; the third row is "Date".
+price.header = data.table::fread(
+  "./data/SnP_daily_update.csv",
+  header = FALSE, nrows = 2, colClasses = "character", showProgress = FALSE
+)
+close.columns = which(as.character(price.header[1, ]) == "Close")
+close.tickers = normalize.ticker(as.character(price.header[2, close.columns, with = FALSE]))
+
+daily.close = data.table::fread(
+  "./data/SnP_daily_update.csv",
+  skip = 3, header = FALSE, select = c(1L, close.columns),
+  col.names = c("post_date", close.tickers), showProgress = FALSE
+)
+
+daily.moves = as_tibble(daily.close) %>%
+  mutate(post_date = as.Date(post_date)) %>%
+  pivot_longer(-post_date, names_to = "title_ticker", values_to = "close") %>%
+  group_by(title_ticker) %>%
+  arrange(post_date, .by_group = TRUE) %>%
+  mutate(
+    previous_close = lag(close),
+    ticker_daily_direction = factor(
+      case_when(
+        is.na(close) | is.na(previous_close) ~ NA_character_,
+        close > previous_close ~ "UP",
+        close < previous_close ~ "DOWN",
+        TRUE ~ "FLAT"
+      ),
+      levels = c("DOWN", "FLAT", "UP")
+    )
+  ) %>%
+  ungroup()
+
+price.status.levels = c(
+  "No extracted cashtag", "Ticker absent from price file", "No price-date row",
+  "Missing current/previous close", "Direction available"
+)
+
+extension.demo = extension.demo %>%
+  left_join(daily.moves, by = c("post_date", "title_ticker"), relationship = "many-to-one") %>%
+  mutate(
+    price_status = factor(
+      case_when(
+        is.na(title_ticker) ~ price.status.levels[1],
+        !title_ticker %in% close.tickers ~ price.status.levels[2],
+        !post_date %in% as.Date(daily.close$post_date) ~ price.status.levels[3],
+        is.na(ticker_daily_direction) ~ price.status.levels[4],
+        TRUE ~ price.status.levels[5]
+      ),
+      levels = price.status.levels
+    ),
+    complete_extension = coalesce(title_ticker_popular, FALSE) &
+      !is.na(ticker_daily_direction) & !is.na(gain_loss)
+  )
+
+# Each cleaned post survives the join exactly once.
+stopifnot(nrow(extension.demo) == nrow(model.df))
+
+extension.demo %>%
+  group_by(price_status) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(post_id, post_date, title_ticker, title_ticker_popular, ticker_daily_direction, gain_loss, price_status) %>%
+  kable(caption = "Demonstration Rows: One Example per Observed Price-Matching Status")
+```
+
+Daily direction compares the closing price on the post's New York calendar date
+with the close on the previous recorded trading date. We do not fill weekends,
+holidays, or unavailable price histories with zero or carry prices forward.
+The status labels distinguish missing cashtags, symbols outside the price file,
+dates without a price row, and unavailable current or previous closes. The latter
+two can reflect calendar or historical coverage rather than an extraction
+failure. Also, a same-day closing price is not available when a post is submitted
+before market close; using it to predict engagement at posting time would leak
+future information. A future extension would need prices known at submission.
+
+### Coverage and missingness
+
+All percentages in the next table use **all cleaned posts** as the denominator.
+Rows describe overlapping subsets: gain/loss coverage is independent of ticker
+coverage, and price coverage is shown both with and without the watchlist
+restriction. The final row illustrates the intersection that would remain if
+we required a watchlist ticker, daily direction, and a gain/loss label together.
+
+```{r extension-coverage-table}
+extension.coverage = tibble(
+  Subset = c(
+    "All cleaned posts", "Extracted cashtag", "Cashtag in reference watchlist",
+    "Daily direction available (any ticker)", "Daily direction + watchlist ticker",
+    "Gain/loss word identified", "Watchlist + direction + gain/loss"
+  ),
+  Posts = c(
+    nrow(extension.demo), sum(!is.na(extension.demo$title_ticker)),
+    sum(extension.demo$title_ticker_popular, na.rm = TRUE),
+    sum(!is.na(extension.demo$ticker_daily_direction)),
+    sum(extension.demo$title_ticker_popular & !is.na(extension.demo$ticker_daily_direction), na.rm = TRUE),
+    sum(!is.na(extension.demo$gain_loss)), sum(extension.demo$complete_extension)
+  )
+) %>%
+  mutate(`Percent of all posts` = 100 * Posts / nrow(extension.demo))
+
+extension.coverage %>%
+  kable(digits = 2, caption = "Post Coverage for the Proposed Extensions (Overlapping Subsets)")
+
+extension.missingness = extension.demo %>%
+  summarise(
+    `Ticker identity` = sum(is.na(title_ticker)),
+    `Watchlist membership` = sum(is.na(title_ticker_popular)),
+    `Daily direction` = sum(is.na(ticker_daily_direction)),
+    `Gain/loss label` = sum(is.na(gain_loss))
+  ) %>%
+  pivot_longer(everything(), names_to = "Proposed feature", values_to = "Missing posts") %>%
+  mutate(`Missing percent` = 100 * `Missing posts` / nrow(extension.demo))
+
+extension.missingness %>%
+  kable(digits = 2, caption = "Unavailable Values in the Demonstration Dataset")
+
+extension.price.status = extension.demo %>%
+  count(price_status, name = "Posts", .drop = FALSE) %>%
+  mutate(`Percent of all posts` = 100 * Posts / nrow(extension.demo))
+
+extension.price.status %>%
+  kable(digits = 2, caption = "Mutually Exclusive Reasons for Daily-Direction Availability")
+```
+
+Watchlist membership is `FALSE` for an extracted ticker outside the reference
+list and `NA` only when no ticker was extracted. Likewise, the absence of a
+gain/loss word is an observed absence; the proposed gain/loss *label* is left
+undefined for those posts. Neither absence makes the retained binary
+`title_has_ticker` or combined `title_has_kw` predictor missing. Daily direction,
+in contrast, requires both a symbol match and two observed closing prices.
+
+```{r extension-missingness-plots, fig.height=8}
+coverage.plot = extension.coverage %>%
+  mutate(Subset = factor(Subset, levels = rev(Subset))) %>%
+  ggplot(aes(x = `Percent of all posts`, y = Subset)) +
+  geom_col(fill = "#2b5c8f") +
+  geom_text(aes(label = sprintf("%.2f%%", `Percent of all posts`)), hjust = -0.1, size = 3.5) +
+  scale_x_continuous(limits = c(0, 115), breaks = seq(0, 100, 25)) +
+  labs(x = "Percent of all cleaned posts", y = NULL, title = "Coverage of proposed extensions") +
+  theme_light()
+
+missingness.plot = extension.missingness %>%
+  mutate(`Proposed feature` = factor(`Proposed feature`, levels = rev(`Proposed feature`))) %>%
+  ggplot(aes(x = `Missing percent`, y = `Proposed feature`)) +
+  geom_col(fill = "#b44b42") +
+  geom_text(aes(label = sprintf("%.2f%%", `Missing percent`)), hjust = -0.1, size = 3.5) +
+  scale_x_continuous(limits = c(0, 115), breaks = seq(0, 100, 25)) +
+  labs(x = "Percent with an unavailable value", y = NULL, title = "Missingness in the demonstration") +
+  theme_light()
+
+coverage.plot / missingness.plot
+```
+
+```{r extension-coverage-by-group, fig.height=4}
+extension.group.coverage = extension.demo %>%
+  group_by(post_type, post_year) %>%
+  summarise(
+    Posts = n(),
+    `Direction available (%)` = 100 * mean(!is.na(ticker_daily_direction)),
+    .groups = "drop"
+  ) %>%
+  complete(post_type, post_year, fill = list(Posts = 0L))
+
+ggplot(extension.group.coverage, aes(x = post_year, y = post_type, fill = `Direction available (%)`)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = if_else(
+    Posts == 0, "No posts", sprintf("%.1f%%\nn = %s", `Direction available (%)`, scales::comma(Posts))
+  )), size = 3.2) +
+  scale_fill_gradient(low = "#edf2f7", high = "#5b91be", limits = c(0, NA), na.value = "grey90") +
+  labs(
+    x = "Post year", y = "Post type", fill = "Available (%)",
+    title = "Daily-direction coverage varies across observed post groups",
+    caption = "Percentages use all posts within each cell; n is the cell's total post count."
+  ) +
+  theme_light()
+```
+
+### Implications for the analysis
+
+Only `r sprintf("%.2f%%", 100 * mean(!is.na(extension.demo$title_ticker)))`
+of cleaned posts have an extracted cashtag, and
+`r sprintf("%.2f%%", 100 * mean(!is.na(extension.demo$ticker_daily_direction)))`
+can be assigned a daily direction from this price file. Requiring a watchlist
+ticker, direction, and gain/loss label together retains
+`r format(sum(extension.demo$complete_extension), big.mark = ",")` posts
+(`r sprintf("%.2f%%", 100 * mean(extension.demo$complete_extension))` of the
+cleaned dataset). Requiring only daily direction would still discard
+`r sprintf("%.2f%%", 100 * mean(is.na(extension.demo$ticker_daily_direction)))`
+of posts. The gain/loss labeling alone covers
+`r sprintf("%.2f%%", 100 * mean(!is.na(extension.demo$gain_loss)))` of posts.
+
+These gaps have identifiable causes. Explicit cashtag usage selects a particular
+writing style; the stock-price file covers a different set of securities from
+our watchlist, which includes meme stocks, ETFs, and indices. Calendar dates,
+listing histories, and ticker changes can create further gaps. The group plot
+shows how actual join coverage differs by post type and year; cell counts also
+expose very small groups and unequal year coverage. These descriptive
+patterns warn that the retained subset may differ systematically from the full
+post population; they do not establish a formal missing-data mechanism.
+
+Listwise deletion would therefore change our question from predicting engagement
+for subreddit posts generally to predicting engagement for posts satisfying
+these extraction and price-coverage rules. It would also remove most observations
+and, if used only for an extended model, make its performance incomparable with
+models evaluated on the original test population. Imputing a ticker or a daily
+movement for a post without an identified security would invent an association,
+while treating an unavailable movement as `FLAT` would confuse missing data with
+an observed zero change. We therefore omit ticker identity, watchlist membership,
+daily direction, and the restricted gain/loss label from all model recipes.
+
+Instead, the expanded models use features derived from the primary post data,
+including cashtag presence and a combined keyword flag. A post without a cashtag
+or keyword contributes a valid `no` value and remains in the analysis. Together
+with post type, posting time, title characteristics, and the existing sarcasm
+scores, these features support comparisons on the same training folds and
+held-out posts without requiring the external price join.
+
 ## Log-linear regression on log1p(comments), expanded features
+
 This is the same expanded feature set with and without sarcasm. With sarcasm, title sarcasm enters as a spline to capture the non-linear trend. The expanded linear model lowers test RMSE from 1.56 (baseline) to 1.47 and raises R² from under 0.01 to 0.114. The largest effects are early-morning posting hours (positive), link and gallery posts (fewer comments), longer titles (more) and longer bodies (fewer). Sarcasm adds a small gain (CV RMSE 1.485 → 1.479).
 
 
@@ -658,6 +886,7 @@ lm1.final %>%
 ```
 
 ## Lasso regression
+
 The lasso penalty was tuned over a log-spaced grid from 10⁻⁵ to 10⁻¹ (best: 0.000113), keeping 51 non-zero terms. Its performance is identical to the expanded linear model (CV RMSE 1.479, R² 0.114), because with 76,167 training posts and a modest number of predictors there is little for regularization to fix. Only a with-sarcasm lasso was fit, so it has no ablation.
 
 ```{r}
@@ -808,8 +1037,10 @@ ggplot(rf1.importance, aes(x = importance, y = reorder(feature, importance))) +
 ```
 
 ## Advanced model discussion
+
 The advanced models predict the same log(1 + comments) target with an expanded predictor set (post type, NY posting hour, day of week, year and title features). Test RMSE falls from 1.56 (baseline) to 1.47 (expanded linear and lasso) and 1.30 (random forest), and R² rises from 0.007 to 0.114 and 0.307, so most of the gain comes from the expanded features and non-linear modeling, not from sarcasm. Lasso (penalty 0.000113, 51 non-zero terms) matches the expanded linear model, since there is little to regularize with 76,167 training posts. The forest (best mtry = 3, min_n = 10, both at the low edge of the grid) is the most accurate, suggesting interactions between timing, post type and year, and it relies most on body length, post type and title length, with body sarcasm ranking fourth. The no-sarcasm forest reuses the hyperparameters tuned with sarcasm, which may slightly favor the sarcasm model. CV and test results agree for every model, so overfitting is not a concern.
-# 4 Model evaluation
+
+# Model evaluation
 
 ## Collect results for all models
 
