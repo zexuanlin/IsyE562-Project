@@ -60,6 +60,7 @@ compresses the right tail, and the +1 keeps posts with zero comments.
 We have the following models being tested and compared in our project:
 
 - Base model: 
+  -null model: reference point to see the impact of the other models
   - Model type: linear regression
   - Predictor:  
     - `log_body_words`: Log transformed word count for post body
@@ -148,6 +149,7 @@ so the held-out test results provide the final performance assessment. Package v
 
 #  Baseline model fit
 This section builds the reference point for the project. We load and clean the post data, define the outcome and predictors, split the data once into training and test sets with shared cross-validation folds, and fit a simple linear regression of log(1 + comments) on three predictors (body length, whether the post has a body, and market-hours posting), with and without the sarcasm scores. A null model that predicts the training mean sets the floor. The advanced models in the next section are judged against these results.
+
 ## Data loading and processing
 
 ### Raw data and post-only filter
@@ -506,6 +508,7 @@ bind_rows(
 
 ### Final fit and test set performance
 
+Test results match CV (RMSE 1.560 without sarcasm and 1.559 with it, vs. 1.564 for the null), so the weak fit reflects model simplicity, not overfitting.
 
 ```{r}
 blm0.final = fit(blm0.wf, wsb.train)
